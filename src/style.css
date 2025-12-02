@@ -1,0 +1,116 @@
+@import "tailwindcss";
+
+:root {
+  font-family: 'Outfit', sans-serif;
+}
+
+@layer utilities {
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    @apply bg-gray-300 dark:bg-gray-600 rounded-full border-2 border-transparent bg-clip-content;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-gray-400 dark:bg-gray-500;
+  }
+}
+
+/* Override typography styles for code blocks to let highlight.js handle it */
+.prose pre {
+  background-color: transparent !important;
+  padding: 0 !important;
+}
+
+.prose pre code {
+  padding: 0 !important;
+  color: inherit !important;
+  font-weight: inherit !important;
+}
+
+/* Ensure hljs styles take precedence and look good */
+code.hljs {
+  display: block;
+  overflow-x: auto;
+  padding: 1em;
+  border-radius: 0.5rem;
+  @apply border border-gray-200 dark:border-gray-800;
+}
+
+/* Markdown Header Styles */
+.prose h1 {
+  @apply text-3xl font-bold mt-6 mb-4;
+}
+
+.prose h2 {
+  @apply text-2xl font-bold mt-5 mb-3;
+}
+
+.prose h3 {
+  @apply text-xl font-bold mt-4 mb-2;
+}
+
+.prose h4 {
+  @apply text-lg font-bold mt-3 mb-2;
+}
+
+.prose h5, .prose h6 {
+  @apply font-bold mt-2 mb-1;
+}
+
+/* Markdown Paragraph Styles */
+.prose p {
+  @apply my-3 leading-relaxed;
+}
+
+/* Markdown Blockquote Styles */
+.prose blockquote {
+  @apply border-l-4 border-gray-300 dark:border-gray-600 pl-4 py-1 my-4 italic text-gray-600 dark:text-gray-400 bg-gray-50 dark:bg-gray-800/30 rounded-r;
+}
+
+/* Markdown List Styles */
+.prose ul {
+  @apply list-disc pl-6 my-2;
+}
+
+.prose ol {
+  @apply list-decimal pl-6 my-2;
+}
+
+.prose li {
+  @apply my-1;
+}
+
+/* Inline Code Styles */
+.prose :not(pre) > code {
+  @apply bg-gray-200 dark:bg-gray-700 px-1.5 py-0.5 rounded border border-gray-300 dark:border-gray-600 font-mono text-sm;
+}
+
+/* Markdown Table Styles */
+.prose table {
+  @apply w-full text-left border-collapse my-4;
+}
+
+.prose th {
+  @apply bg-gray-200 dark:bg-gray-700 p-2 border border-gray-300 dark:border-gray-600 font-semibold;
+}
+
+.prose td {
+  @apply p-2 border border-gray-300 dark:border-gray-600;
+}
+
+.prose tr:nth-child(even) {
+  @apply bg-gray-50 dark:bg-gray-800/50;
+}
+
+/* Link Styles */
+.prose a {
+  @apply text-blue-600 dark:text-blue-400 underline hover:text-blue-800 dark:hover:text-blue-300 break-all;
+}
