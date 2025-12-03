@@ -6,7 +6,10 @@ use tokio::sync::Mutex;
 use serde_json::Value;
 use tauri::State;
 use tauri::Manager;
-use window_vibrancy::{apply_vibrancy, apply_mica, NSVisualEffectMaterial};
+#[cfg(target_os = "macos")]
+use window_vibrancy::{apply_vibrancy, NSVisualEffectMaterial};
+#[cfg(target_os = "windows")]
+use window_vibrancy::apply_mica;
 use rmcp::model::CallToolRequestParam;
 
 struct McpState {
