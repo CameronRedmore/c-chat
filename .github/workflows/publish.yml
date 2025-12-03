@@ -104,7 +104,7 @@ jobs:
         run: pnpm install
 
       - name: Build Android APK
-        run: pnpm tauri android build --apk
+        run: pnpm tauri android build --apk true
         env:
           NDK_HOME: ${{ env.ANDROID_NDK_HOME }}
 
