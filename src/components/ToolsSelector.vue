@@ -227,104 +227,106 @@ const enabledToolCount = computed(() => {
     </button>
 
     <!-- Modal -->
-    <div 
-      v-if="isOpen"
-      class="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50"
-      @click.self="closeModal"
-    >
-      <div class="bg-white/90 dark:bg-gray-800/90 backdrop-blur-md rounded-lg shadow-xl w-full max-w-2xl max-h-[80vh] flex flex-col">
-        <!-- Header -->
-        <div class="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700">
-          <h3 class="text-lg font-semibold text-gray-900 dark:text-gray-100">Configure Tools</h3>
-          <button 
-            @click="closeModal"
-            class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"
-          >
-            <Icon icon="lucide:x" class="w-5 h-5" />
-          </button>
-        </div>
-
-        <!-- Content -->
-        <div class="flex-1 overflow-y-auto p-4">
-          <p class="text-sm text-gray-600 dark:text-gray-400 mb-4">
-            Select tools that are available to this chat session. Tools are organized by their MCP server.
-          </p>
-
-          <div v-if="isLoading" class="flex items-center justify-center py-8">
-            <Icon icon="lucide:loader-2" class="w-8 h-8 animate-spin text-blue-600" />
-          </div>
-
-          <div v-else-if="serversWithTools.length === 0" class="text-center py-8 text-gray-500 dark:text-gray-400">
-            No MCP servers enabled. Enable servers in Settings.
-          </div>
-
-          <div v-else class="space-y-2">
-            <div 
-              v-for="server in serversWithTools" 
-              :key="server.serverId"
-              class="border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden"
+    <Teleport to="body">
+      <div 
+        v-if="isOpen"
+        class="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50"
+        @click.self="closeModal"
+      >
+        <div class="bg-white/90 dark:bg-gray-800/90 backdrop-blur-md rounded-lg shadow-xl w-full max-w-2xl max-h-[80vh] flex flex-col">
+          <!-- Header -->
+          <div class="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700">
+            <h3 class="text-lg font-semibold text-gray-900 dark:text-gray-100">Configure Tools</h3>
+            <button 
+              @click="closeModal"
+              class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"
             >
-              <!-- Server Header -->
-              <div 
-                class="flex items-center gap-3 p-3 bg-gray-50/80 dark:bg-gray-900/80 cursor-pointer hover:bg-gray-100/80 dark:hover:bg-gray-700/80"
-                @click="toggleServerExpansion(server.serverId)"
-              >
-                <input 
-                  type="checkbox"
-                  :checked="isServerFullyEnabled(server.serverId)"
-                  :indeterminate="isServerPartiallyEnabled(server.serverId)"
-                  @click.stop="toggleServer(server.serverId)"
-                  class="w-4 h-4 cursor-pointer"
-                />
-                <Icon 
-                  :icon="server.isExpanded ? 'lucide:chevron-down' : 'lucide:chevron-right'" 
-                  class="w-4 h-4 text-gray-500"
-                />
-                <span class="font-medium flex-1 text-gray-900 dark:text-gray-100">{{ server.serverName }}</span>
-                <span class="text-xs text-gray-500 dark:text-gray-400">
-                  {{ server.tools.length }} tool{{ server.tools.length !== 1 ? 's' : '' }}
-                </span>
-              </div>
+              <Icon icon="lucide:x" class="w-5 h-5" />
+            </button>
+          </div>
 
-              <!-- Tools List -->
-              <div v-if="server.isExpanded" class="p-2 space-y-1 bg-white/50 dark:bg-gray-800/50">
+          <!-- Content -->
+          <div class="flex-1 overflow-y-auto p-4">
+            <p class="text-sm text-gray-600 dark:text-gray-400 mb-4">
+              Select tools that are available to this chat session. Tools are organized by their MCP server.
+            </p>
+
+            <div v-if="isLoading" class="flex items-center justify-center py-8">
+              <Icon icon="lucide:loader-2" class="w-8 h-8 animate-spin text-blue-600" />
+            </div>
+
+            <div v-else-if="serversWithTools.length === 0" class="text-center py-8 text-gray-500 dark:text-gray-400">
+              No MCP servers enabled. Enable servers in Settings.
+            </div>
+
+            <div v-else class="space-y-2">
+              <div 
+                v-for="server in serversWithTools" 
+                :key="server.serverId"
+                class="border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden"
+              >
+                <!-- Server Header -->
                 <div 
-                  v-for="tool in server.tools"
-                  :key="tool.name"
-                  class="flex items-start gap-3 p-2 hover:bg-gray-50/50 dark:hover:bg-gray-700/50 rounded cursor-pointer"
-                  @click="toggleTool(server.serverId, tool.name)"
+                  class="flex items-center gap-3 p-3 bg-gray-50/80 dark:bg-gray-900/80 cursor-pointer hover:bg-gray-100/80 dark:hover:bg-gray-700/80"
+                  @click="toggleServerExpansion(server.serverId)"
                 >
                   <input 
                     type="checkbox"
-                    :checked="isToolEnabled(server.serverId, tool.name)"
-                    @click.stop="toggleTool(server.serverId, tool.name)"
-                    class="w-4 h-4 mt-0.5 cursor-pointer"
+                    :checked="isServerFullyEnabled(server.serverId)"
+                    :indeterminate="isServerPartiallyEnabled(server.serverId)"
+                    @click.stop="toggleServer(server.serverId)"
+                    class="w-4 h-4 cursor-pointer"
                   />
-                  <div class="flex-1 min-w-0">
-                    <div class="font-mono text-sm text-gray-900 dark:text-gray-100">{{ tool.name }}</div>
-                    <div v-if="tool.description" class="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                      {{ tool.description }}
+                  <Icon 
+                    :icon="server.isExpanded ? 'lucide:chevron-down' : 'lucide:chevron-right'" 
+                    class="w-4 h-4 text-gray-500"
+                  />
+                  <span class="font-medium flex-1 text-gray-900 dark:text-gray-100">{{ server.serverName }}</span>
+                  <span class="text-xs text-gray-500 dark:text-gray-400">
+                    {{ server.tools.length }} tool{{ server.tools.length !== 1 ? 's' : '' }}
+                  </span>
+                </div>
+
+                <!-- Tools List -->
+                <div v-if="server.isExpanded" class="p-2 space-y-1 bg-white/50 dark:bg-gray-800/50">
+                  <div 
+                    v-for="tool in server.tools"
+                    :key="tool.name"
+                    class="flex items-start gap-3 p-2 hover:bg-gray-50/50 dark:hover:bg-gray-700/50 rounded cursor-pointer"
+                    @click="toggleTool(server.serverId, tool.name)"
+                  >
+                    <input 
+                      type="checkbox"
+                      :checked="isToolEnabled(server.serverId, tool.name)"
+                      @click.stop="toggleTool(server.serverId, tool.name)"
+                      class="w-4 h-4 mt-0.5 cursor-pointer"
+                    />
+                    <div class="flex-1 min-w-0">
+                      <div class="font-mono text-sm text-gray-900 dark:text-gray-100">{{ tool.name }}</div>
+                      <div v-if="tool.description" class="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                        {{ tool.description }}
+                      </div>
                     </div>
                   </div>
                 </div>
               </div>
             </div>
           </div>
-        </div>
 
-        <!-- Footer -->
-        <div class="flex items-center justify-between p-4 border-t border-gray-200 dark:border-gray-700">
-          <div class="text-sm text-gray-600 dark:text-gray-400">
-            {{ enabledToolCount }} tool{{ enabledToolCount !== 1 ? 's' : '' }} selected
+          <!-- Footer -->
+          <div class="flex items-center justify-between p-4 border-t border-gray-200 dark:border-gray-700">
+            <div class="text-sm text-gray-600 dark:text-gray-400">
+              {{ enabledToolCount }} tool{{ enabledToolCount !== 1 ? 's' : '' }} selected
+            </div>
+            <button 
+              @click="closeModal"
+              class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+            >
+              Done
+            </button>
           </div>
-          <button 
-            @click="closeModal"
-            class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
-          >
-            Done
-          </button>
         </div>
       </div>
-    </div>
+    </Teleport>
   </div>
 </template>
