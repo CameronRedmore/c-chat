@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, nextTick } from 'vue';
+import { ref, onMounted, onUnmounted } from 'vue';
 import { useSettingsStore, type Endpoint, type Model, type SystemPrompt, type McpServer } from '../stores/settings';
 import { syncService } from '../services/sync';
 import { storeToRefs } from 'pinia';

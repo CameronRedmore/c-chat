@@ -67,7 +67,7 @@ function createNewChat() {
       alert('Please add a model in Settings first.');
       return;
     }
-    const newSession = chatStore.createSession(settingsStore.models[0].id);
+    chatStore.createSession(settingsStore.models[0].id);
     if (currentProjectId.value) {
         // If inside a project, move it there? 
         // The store createSession doesn't take a projectId.
