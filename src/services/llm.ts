@@ -11,13 +11,21 @@ export interface UpdatePayload {
   toolResults?: ToolResult[];
 }
 
+export interface SamplerSettings {
+  temperature?: number;
+  topP?: number;
+  topK?: number;
+  minP?: number;
+}
+
 export async function sendMessage(
   endpoint: Endpoint,
   model: Model,
   messages: Message[],
-  temperature: number,
+  settings: SamplerSettings,
   onUpdate: (payload: UpdatePayload) => void,
-  enabledMcpTools?: EnabledMcpTool[] // Tools enabled for this specific chat
+  enabledMcpTools?: EnabledMcpTool[], // Tools enabled for this specific chat
+  signal?: AbortSignal
 ) {
   const settingsStore = useSettingsStore();
   const headers: Record<string, string> = {
@@ -29,13 +37,13 @@ export async function sendMessage(
 
   // Prepare messages
   const apiMessages: any[] = [];
-  
+
   for (const m of messages) {
     // Handle assistant messages with parts (interleaved tools/content)
     if (m.role === 'assistant' && m.parts && m.parts.length > 0) {
       let pendingContent = '';
       let pendingToolCalls: any[] = [];
-      
+
       for (const part of m.parts) {
         if (part.type === 'text' && part.content) {
           pendingContent += part.content;
@@ -55,10 +63,10 @@ export async function sendMessage(
             content: pendingContent || null,
             tool_calls: pendingToolCalls.length > 0 ? pendingToolCalls : undefined
           });
-          
+
           pendingContent = '';
           pendingToolCalls = [];
-          
+
           // Add tool result
           const toolName = m.parts.find(p => p.type === 'tool-call' && p.toolCall?.id === part.toolResult?.callId)?.toolCall?.name;
           apiMessages.push({
@@ -69,7 +77,7 @@ export async function sendMessage(
           });
         }
       }
-      
+
       // Flush remaining
       if (pendingContent || pendingToolCalls.length > 0) {
         apiMessages.push({
@@ -78,7 +86,7 @@ export async function sendMessage(
           tool_calls: pendingToolCalls.length > 0 ? pendingToolCalls : undefined
         });
       }
-      
+
       continue;
     }
 
@@ -152,7 +160,7 @@ export async function sendMessage(
   if (model.supportsFunctionCalling) {
     console.log('Model supports function calling, loading tools...');
     const settingsStore = useSettingsStore();
-    
+
     // Use enabled tools from chat session if provided, otherwise use all enabled servers
     if (enabledMcpTools && enabledMcpTools.length > 0) {
       // Load only the tools specified for this chat
@@ -163,15 +171,15 @@ export async function sendMessage(
         try {
           const client = await getMcpClient(server);
           const serverTools = await client.listTools();
-          
+
           for (const tool of serverTools) {
             // If toolNames is empty, all tools are enabled
-            const isToolEnabled = enabledTool.toolNames.length === 0 || 
-                                  enabledTool.toolNames.includes(tool.name);
-            
+            const isToolEnabled = enabledTool.toolNames.length === 0 ||
+              enabledTool.toolNames.includes(tool.name);
+
             if (isToolEnabled) {
               mcpToolsMap.set(tool.name, { serverId: server.id, tool });
-              
+
               tools.push({
                 type: 'function',
                 function: {
@@ -189,15 +197,15 @@ export async function sendMessage(
     } else {
       // Fallback: Load all tools from all enabled servers (backward compatibility)
       const enabledServers = settingsStore.mcpServers.filter(s => s.enabled);
-      
+
       for (const server of enabledServers) {
         try {
           const client = await getMcpClient(server);
           const serverTools = await client.listTools();
-          
+
           for (const tool of serverTools) {
             mcpToolsMap.set(tool.name, { serverId: server.id, tool });
-            
+
             tools.push({
               type: 'function',
               function: {
@@ -227,7 +235,10 @@ export async function sendMessage(
     const body: any = {
       model: model.id,
       messages: currentMessages,
-      temperature: temperature,
+      temperature: settings.temperature,
+      top_p: settings.topP,
+      top_k: settings.topK,
+      min_p: settings.minP,
       stream: true,
     };
 
@@ -240,6 +251,7 @@ export async function sendMessage(
       method: 'POST',
       headers,
       body: JSON.stringify(body),
+      signal
     });
 
     if (!response.ok) {
@@ -252,7 +264,7 @@ export async function sendMessage(
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
-    
+
     let assistantMessageContent = '';
     let toolCalls: any[] = [];
 
@@ -271,7 +283,7 @@ export async function sendMessage(
           try {
             const data = JSON.parse(trimmed.slice(6));
             const delta = data.choices?.[0]?.delta;
-            
+
             if (delta?.reasoning_content) {
               onUpdate({ reasoning: delta.reasoning_content });
             }
@@ -309,7 +321,7 @@ export async function sendMessage(
     if (toolCalls.length > 0) {
       console.log('Executing tool calls:', toolCalls);
       keepGoing = true;
-      
+
       // Parse tool calls for storage
       const parsedToolCalls: ToolCall[] = toolCalls.map(tc => {
         let args = {};
@@ -344,14 +356,14 @@ export async function sendMessage(
         let result = '';
         let isError = false;
         const mcpTool = mcpToolsMap.get(toolName);
-        
+
         if (mcpTool) {
           try {
             const server = settingsStore.mcpServers.find(s => s.id === mcpTool.serverId);
             if (server) {
               const client = await getMcpClient(server);
               const toolResult = await client.callTool(toolName, args);
-              
+
               // Format result
               if (toolResult.content) {
                 result = toolResult.content.map((c: any) => {
@@ -389,7 +401,7 @@ export async function sendMessage(
           content: result
         } as any);
       }
-      
+
       // Update the assistant message with tool results
       onUpdate({ toolResults });
     }

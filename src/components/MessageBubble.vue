@@ -44,9 +44,9 @@ function saveEdit() {
 
 <template>
   <div 
-    class="p-4 rounded-lg max-w-3xl overflow-x-auto relative group"
+    class="p-4 rounded-lg max-w-3xl overflow-x-auto relative group backdrop-blur-sm"
     :class="[
-      message.role === 'user' ? 'bg-blue-100 dark:bg-blue-900 ml-auto' : 'bg-gray-100 dark:bg-gray-800 mr-auto'
+      message.role === 'user' ? 'bg-blue-100/80 dark:bg-blue-900/60 ml-auto' : 'bg-gray-100/80 dark:bg-gray-800/60 mr-auto'
     ]"
   >
     <div class="absolute top-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity z-10">

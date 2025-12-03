@@ -51,11 +51,17 @@ export interface Project {
   order: number;
   isExpanded: boolean;
   createdAt: number;
+  updatedAt: number;
 }
 
 export interface EnabledMcpTool {
   serverId: string;
   toolNames: string[]; // Empty array means all tools enabled for this server
+}
+
+export interface Tombstone {
+  id: string;
+  deletedAt: number;
 }
 
 export interface ChatSession {
@@ -64,8 +70,12 @@ export interface ChatSession {
   modelId: string;
   systemPromptId?: string;
   temperature?: number;
+  topP?: number;
+  topK?: number;
+  minP?: number;
   messages: Message[];
   createdAt: number;
+  updatedAt: number;
   projectId?: string;
   order?: number;
   enabledMcpTools?: EnabledMcpTool[]; // Tools enabled for this specific chat
@@ -74,8 +84,14 @@ export interface ChatSession {
 export const useChatStore = defineStore('chat', () => {
   const sessions = ref<ChatSession[]>([]);
   const projects = ref<Project[]>([]);
+  const deletedSessions = ref<Tombstone[]>([]);
+  const deletedProjects = ref<Tombstone[]>([]);
   const activeSessionId = ref<string | null>(null);
+  const isGenerating = ref(false);
   let store: Store | null = null;
+
+  // We need to access settings store, but we should do it inside actions to avoid early access issues
+  // or use it lazily. Since this is a store definition, we can use it inside actions.
 
   async function getStore() {
     if (!store) {
@@ -84,7 +100,7 @@ export const useChatStore = defineStore('chat', () => {
     return store;
   }
 
-  const activeSession = computed(() => 
+  const activeSession = computed(() =>
     sessions.value.find(s => s.id === activeSessionId.value)
   );
 
@@ -96,11 +112,11 @@ export const useChatStore = defineStore('chat', () => {
       savedSessions.forEach(session => {
         session.messages.forEach(msg => {
           if (!msg.id) msg.id = crypto.randomUUID();
-          
+
           // Migrate to parts if not present
           if (!msg.parts) {
             msg.parts = [];
-            
+
             // 1. Reasoning
             if (msg.reasoning) {
               msg.parts.push({
@@ -109,7 +125,7 @@ export const useChatStore = defineStore('chat', () => {
                 content: msg.reasoning
               });
             }
-            
+
             // 2. Tool Calls and Results (interleaved best effort or just grouped)
             // Since we don't have historical order, we'll just put calls then results
             if (msg.toolCalls) {
@@ -119,7 +135,7 @@ export const useChatStore = defineStore('chat', () => {
                   type: 'tool-call',
                   toolCall: tc
                 });
-                
+
                 // Find corresponding result
                 const result = msg.toolResults?.find(tr => tr.callId === tc.id);
                 if (result) {
@@ -131,7 +147,7 @@ export const useChatStore = defineStore('chat', () => {
                 }
               });
             }
-            
+
             // 3. Content
             if (msg.content) {
               msg.parts.push({
@@ -145,15 +161,23 @@ export const useChatStore = defineStore('chat', () => {
       });
       sessions.value = savedSessions;
     }
-    
+
     const savedProjects = await s.get<Project[]>('projects');
     if (savedProjects) projects.value = savedProjects;
+
+    const savedDeletedSessions = await s.get<Tombstone[]>('deletedSessions');
+    if (savedDeletedSessions) deletedSessions.value = savedDeletedSessions;
+
+    const savedDeletedProjects = await s.get<Tombstone[]>('deletedProjects');
+    if (savedDeletedProjects) deletedProjects.value = savedDeletedProjects;
   }
 
   async function save() {
     const s = await getStore();
     await s.set('sessions', sessions.value);
     await s.set('projects', projects.value);
+    await s.set('deletedSessions', deletedSessions.value);
+    await s.set('deletedProjects', deletedProjects.value);
     await s.save();
   }
 
@@ -166,6 +190,7 @@ export const useChatStore = defineStore('chat', () => {
       systemPromptId,
       messages: [],
       createdAt: Date.now(),
+      updatedAt: Date.now(),
       projectId,
       order: 0 // Should be calculated to be at top
     };
@@ -175,7 +200,7 @@ export const useChatStore = defineStore('chat', () => {
         s.order = (s.order || 0) + 1;
       }
     });
-    
+
     sessions.value.unshift(newSession);
     activeSessionId.value = id;
     save();
@@ -189,7 +214,8 @@ export const useChatStore = defineStore('chat', () => {
       name,
       order: 0,
       isExpanded: true,
-      createdAt: Date.now()
+      createdAt: Date.now(),
+      updatedAt: Date.now()
     };
     // Adjust orders of root items (projects and root sessions)
     // This is a bit complex because they are in different arrays.
@@ -207,7 +233,12 @@ export const useChatStore = defineStore('chat', () => {
         s.projectId = undefined;
       }
     });
+    
+    if (projects.value.some(p => p.id === id)) {
+      deletedProjects.value.push({ id, deletedAt: Date.now() });
+    }
     projects.value = projects.value.filter(p => p.id !== id);
+
     save();
   }
 
@@ -215,15 +246,20 @@ export const useChatStore = defineStore('chat', () => {
     const project = projects.value.find(p => p.id === id);
     if (project) {
       Object.assign(project, updates);
+      project.updatedAt = Date.now();
       save();
     }
   }
 
   function deleteSession(id: string) {
+    if (sessions.value.some(s => s.id === id)) {
+      deletedSessions.value.push({ id, deletedAt: Date.now() });
+    }
     sessions.value = sessions.value.filter(s => s.id !== id);
     if (activeSessionId.value === id) {
       activeSessionId.value = null;
     }
+
     save();
   }
 
@@ -234,6 +270,7 @@ export const useChatStore = defineStore('chat', () => {
         message.id = crypto.randomUUID();
       }
       session.messages.push(message);
+      session.updatedAt = Date.now();
       save();
       return session.messages[session.messages.length - 1];
     }
@@ -252,6 +289,7 @@ export const useChatStore = defineStore('chat', () => {
         // The legacy rendering shows tool calls then content.
         // So clearing parts is a safe fallback that preserves data but loses the interleaved display for this specific message.
         message.parts = undefined;
+        session.updatedAt = Date.now();
         save();
       }
     }
@@ -261,6 +299,7 @@ export const useChatStore = defineStore('chat', () => {
     const session = sessions.value.find(s => s.id === sessionId);
     if (session) {
       session.messages = session.messages.filter(m => m.id !== messageId);
+      session.updatedAt = Date.now();
       save();
     }
   }
@@ -269,6 +308,7 @@ export const useChatStore = defineStore('chat', () => {
     const session = sessions.value.find(s => s.id === sessionId);
     if (session) {
       Object.assign(session, settings);
+      session.updatedAt = Date.now();
       save();
     }
   }
@@ -283,6 +323,7 @@ export const useChatStore = defineStore('chat', () => {
         } else {
           session.messages = session.messages.slice(0, index + 1);
         }
+        session.updatedAt = Date.now();
         save();
       }
     }
@@ -291,8 +332,11 @@ export const useChatStore = defineStore('chat', () => {
   return {
     sessions,
     projects,
+    deletedSessions,
+    deletedProjects,
     activeSessionId,
     activeSession,
+    isGenerating,
     load,
     save,
     createSession,

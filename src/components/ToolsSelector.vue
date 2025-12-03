@@ -229,10 +229,10 @@ const enabledToolCount = computed(() => {
     <!-- Modal -->
     <div 
       v-if="isOpen"
-      class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50"
+      class="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50"
       @click.self="closeModal"
     >
-      <div class="bg-white dark:bg-gray-800 rounded-lg shadow-xl w-full max-w-2xl max-h-[80vh] flex flex-col">
+      <div class="bg-white/90 dark:bg-gray-800/90 backdrop-blur-md rounded-lg shadow-xl w-full max-w-2xl max-h-[80vh] flex flex-col">
         <!-- Header -->
         <div class="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700">
           <h3 class="text-lg font-semibold text-gray-900 dark:text-gray-100">Configure Tools</h3>
@@ -266,7 +266,7 @@ const enabledToolCount = computed(() => {
             >
               <!-- Server Header -->
               <div 
-                class="flex items-center gap-3 p-3 bg-gray-50 dark:bg-gray-900 cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700"
+                class="flex items-center gap-3 p-3 bg-gray-50/80 dark:bg-gray-900/80 cursor-pointer hover:bg-gray-100/80 dark:hover:bg-gray-700/80"
                 @click="toggleServerExpansion(server.serverId)"
               >
                 <input 
@@ -287,11 +287,11 @@ const enabledToolCount = computed(() => {
               </div>
 
               <!-- Tools List -->
-              <div v-if="server.isExpanded" class="p-2 space-y-1 bg-white dark:bg-gray-800">
+              <div v-if="server.isExpanded" class="p-2 space-y-1 bg-white/50 dark:bg-gray-800/50">
                 <div 
                   v-for="tool in server.tools"
                   :key="tool.name"
-                  class="flex items-start gap-3 p-2 hover:bg-gray-50 dark:hover:bg-gray-700 rounded cursor-pointer"
+                  class="flex items-start gap-3 p-2 hover:bg-gray-50/50 dark:hover:bg-gray-700/50 rounded cursor-pointer"
                   @click="toggleTool(server.serverId, tool.name)"
                 >
                   <input 

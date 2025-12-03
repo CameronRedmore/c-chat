@@ -35,7 +35,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="titlebar flex justify-between items-center bg-gray-100 dark:bg-gray-800 select-none h-8">
+  <div class="titlebar flex justify-between items-center bg-transparent select-none h-8 border-b border-gray-200 dark:border-gray-700">
     <div data-tauri-drag-region class="flex-1 flex items-center pl-4 h-full">
       <AnimatedLogo compact class="pointer-events-none" />
     </div>

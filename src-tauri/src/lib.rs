@@ -1,11 +1,12 @@
 mod mcp;
-mod sync;
 
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use serde_json::Value;
 use tauri::State;
+use tauri::Manager;
+use window_vibrancy::{apply_vibrancy, apply_mica, NSVisualEffectMaterial};
 use rmcp::model::CallToolRequestParam;
 
 struct McpState {
@@ -81,14 +82,24 @@ pub fn run() {
         .manage(McpState {
             clients: Mutex::new(HashMap::new()),
         })
-        .manage(sync::SyncService::new())
+        .setup(|app| {
+            let window = app.get_webview_window("main").unwrap();
+
+            #[cfg(target_os = "macos")]
+            apply_vibrancy(&window, NSVisualEffectMaterial::HudWindow, None, None)
+                .expect("Unsupported platform! 'apply_vibrancy' is only supported on macOS");
+
+            #[cfg(target_os = "windows")]
+            apply_mica(&window, None)
+                .expect("Unsupported platform! 'apply_mica' is only supported on Windows");
+
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             greet,
             mcp_connect,
             mcp_list_tools,
-            mcp_call_tool,
-            sync::start_sync_server,
-            sync::stop_sync_server
+            mcp_call_tool
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -2,7 +2,10 @@
 import { onMounted, ref } from 'vue';
 import { useSettingsStore } from './stores/settings';
 import { useChatStore } from './stores/chat';
+import { syncService } from './services/sync';
 import TitleBar from './components/TitleBar.vue';
+import SyncStatus from './components/SyncStatus.vue';
+import { Icon } from '@iconify/vue';
 
 const settingsStore = useSettingsStore();
 const chatStore = useChatStore();
@@ -14,20 +17,30 @@ onMounted(async () => {
   
   await settingsStore.load();
   await chatStore.load();
+
+  if (settingsStore.syncToken) {
+    syncService.startAutoSync();
+  }
 });
 </script>
 
 <template>
-  <div class="h-screen w-screen bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100 overflow-hidden flex flex-col">
+  <div class="h-screen w-screen bg-transparent text-gray-900 dark:text-gray-100 overflow-hidden flex flex-col">
     <TitleBar v-if="!isMobile" />
     <!-- Status bar spacer for mobile -->
     <div 
       v-if="isMobile" 
-      class="w-full bg-white dark:bg-gray-900 transition-colors shrink-0" 
+      class="w-full bg-transparent transition-colors shrink-0" 
       style="height: max(env(safe-area-inset-top, 0px), 30px);"
     ></div>
     <div class="flex-1 overflow-hidden relative">
       <router-view />
+    </div>
+    <div class="shrink-0 h-8 bg-transparent border-t border-gray-200 dark:border-gray-700 flex items-center px-4 justify-between">
+      <router-link to="/settings" class="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200" title="Settings">
+        <Icon icon="lucide:settings" class="w-4 h-4" />
+      </router-link>
+      <SyncStatus />
     </div>
   </div>
 </template>
@@ -145,5 +158,4 @@ button {
   }
 }
 */
-
 </style>

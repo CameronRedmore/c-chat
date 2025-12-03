@@ -1,55 +1,37 @@
 <script setup lang="ts">
 import { ref, nextTick, watch, computed } from 'vue';
-import { useChatStore, type Message, type Project, type Attachment } from '../stores/chat';
+import { useRouter } from 'vue-router';
+import { useChatStore, type Message, type Attachment } from '../stores/chat';
 import { useSettingsStore } from '../stores/settings';
 import { storeToRefs } from 'pinia';
-import draggable from 'vuedraggable';
+import SidebarNavigation from '../components/SidebarNavigation.vue';
+import ToolsSelector from '../components/ToolsSelector.vue';
 import MessageBubble from '../components/MessageBubble.vue';
 import ChatSettingsFlyout from '../components/ChatSettingsFlyout.vue';
-import SidebarProject from '../components/SidebarProject.vue';
-import ToolsSelector from '../components/ToolsSelector.vue';
 import { sendMessage } from '../services/llm';
 import { Icon } from '@iconify/vue';
 
+const router = useRouter();
 const chatStore = useChatStore();
 const settingsStore = useSettingsStore();
-const { activeSession, activeSessionId } = storeToRefs(chatStore);
+const { activeSession, isGenerating } = storeToRefs(chatStore);
 const { models, endpoints, systemPrompts } = storeToRefs(settingsStore);
 
 const userInput = ref('');
 const isFlyoutOpen = ref(false);
-const isGenerating = ref(false);
+const abortController = ref<AbortController | null>(null);
 const messagesContainer = ref<HTMLElement | null>(null);
 const fileInput = ref<HTMLInputElement | null>(null);
 const selectedAttachments = ref<Attachment[]>([]);
 const isDragging = ref(false);
 const isSidebarOpen = ref(false);
 
-const editingSessionId = ref<string | null>(null);
-const editSessionTitle = ref('');
-const sessionInput = ref<HTMLInputElement | null>(null);
-
-function startEditingSession(session: any) {
-  editingSessionId.value = session.id;
-  editSessionTitle.value = session.title;
-  nextTick(() => {
-    sessionInput.value?.focus();
-  });
-}
-
-function saveSessionTitle(sessionId: string) {
-  if (editingSessionId.value === sessionId && editSessionTitle.value.trim()) {
-    chatStore.updateSessionSettings(sessionId, { title: editSessionTitle.value.trim() });
+function stopGeneration() {
+  if (abortController.value) {
+    abortController.value.abort();
+    abortController.value = null;
+    isGenerating.value = false;
   }
-  editingSessionId.value = null;
-}
-
-function renameProject(id: string, name: string) {
-  chatStore.updateProject(id, { name });
-}
-
-function renameSession(id: string, title: string) {
-  chatStore.updateSessionSettings(id, { title });
 }
 
 const currentModel = computed(() => {
@@ -60,69 +42,6 @@ const currentModel = computed(() => {
 const isVisionSupported = computed(() => {
   return currentModel.value?.supportsVision ?? false;
 });
-
-const rootItems = computed({
-  get: () => {
-    const projs = chatStore.projects.map(p => ({ ...p, type: 'project' }));
-    const sess = chatStore.sessions
-      .filter(s => !s.projectId)
-      .map(s => ({ ...s, type: 'session' }));
-    
-    return [...projs, ...sess].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
-  },
-  set: (items) => {
-    items.forEach((item, index) => {
-      if (item.type === 'project') {
-        const p = chatStore.projects.find(p => p.id === item.id);
-        if (p) p.order = index;
-      } else {
-        const s = chatStore.sessions.find(s => s.id === item.id);
-        if (s) {
-          s.order = index;
-          s.projectId = undefined;
-        }
-      }
-    });
-    chatStore.save();
-  }
-});
-
-function createNewChat() {
-  if (models.value.length === 0) {
-    alert('Please add a model in Settings first.');
-    return;
-  }
-  chatStore.createSession(models.value[0].id);
-  isSidebarOpen.value = false;
-}
-
-function createProject() {
-  const name = prompt("Project Name:");
-  if (name) {
-    chatStore.createProject(name);
-  }
-}
-
-function toggleProject(project: Project) {
-  chatStore.updateProject(project.id, { isExpanded: !project.isExpanded });
-}
-
-function deleteProject(id: string) {
-  // event.stopPropagation(); // Handled in component
-  if(confirm("Delete project? Chats will be moved to root.")) {
-    chatStore.deleteProject(id);
-  }
-}
-
-function selectSession(id: string) {
-  activeSessionId.value = id;
-  isSidebarOpen.value = false;
-}
-
-function deleteSession(id: string, event: Event) {
-  event.stopPropagation();
-  chatStore.deleteSession(id);
-}
 
 function triggerFileInput() {
   if (!isVisionSupported.value) return;
@@ -229,7 +148,7 @@ Title:`;
 
   let title = '';
   try {
-    await sendMessage(endpoint, model, messages, 0.7, (payload) => {
+    await sendMessage(endpoint, model, messages, { temperature: 0.7 }, (payload) => {
        if (payload.content) title += payload.content;
     });
     
@@ -257,6 +176,7 @@ async function triggerAssistantResponse(sessionId: string, checkTitleGeneration:
   }
 
   isGenerating.value = true;
+  abortController.value = new AbortController();
   const startTime = Date.now();
   const initialAssistantMsg: Message = {
     role: 'assistant',
@@ -289,7 +209,12 @@ async function triggerAssistantResponse(sessionId: string, checkTitleGeneration:
       endpoint,
       model,
       apiMessages,
-      session.temperature ?? model.temperature ?? 0.7,
+      {
+        temperature: session.temperature ?? model.temperature ?? 0.7,
+        topP: session.topP ?? model.topP ?? 1,
+        topK: session.topK ?? model.topK ?? 0,
+        minP: session.minP ?? model.minP ?? 0,
+      },
       (payload) => {
         if (!assistantMsg.parts) assistantMsg.parts = [];
         const parts = assistantMsg.parts;
@@ -341,7 +266,8 @@ async function triggerAssistantResponse(sessionId: string, checkTitleGeneration:
         }
         scrollToBottom();
       },
-      session.enabledMcpTools
+      session.enabledMcpTools,
+      abortController.value?.signal
     );
   } catch (e) {
     assistantMsg.content += `\n\nError: ${e}`;
@@ -353,6 +279,7 @@ async function triggerAssistantResponse(sessionId: string, checkTitleGeneration:
       });
     }
   } finally {
+    abortController.value = null;
     const endTime = Date.now();
     const duration = endTime - startTime;
     assistantMsg.generationTime = duration;
@@ -374,6 +301,9 @@ async function triggerAssistantResponse(sessionId: string, checkTitleGeneration:
     if (duration > 0) {
       assistantMsg.tokensPerSecond = estimatedTokens / (duration / 1000);
     }
+
+    // Update session timestamp to ensure it's treated as the latest version during sync
+    chatStore.updateSessionSettings(sessionId, {});
 
     isGenerating.value = false;
     chatStore.save();
@@ -455,12 +385,6 @@ function updateModel(event: Event) {
   chatStore.updateSessionSettings(activeSession.value.id, { modelId: select.value });
 }
 
-function updateSystemPrompt(event: Event) {
-  if (!activeSession.value) return;
-  const select = event.target as HTMLSelectElement;
-  chatStore.updateSessionSettings(activeSession.value.id, { systemPromptId: select.value || undefined });
-}
-
 watch(() => activeSession.value?.messages.length, () => {
   nextTick(scrollToBottom);
 });
@@ -477,108 +401,20 @@ watch(() => activeSession.value?.messages.length, () => {
 
     <!-- Sidebar -->
     <div 
-      class="w-64 bg-gray-50 dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700 flex flex-col
+      class="w-64 bg-transparent border-r border-gray-200 dark:border-gray-700 flex flex-col
              absolute md:relative z-30 h-full transition-transform duration-300 ease-in-out"
       :class="isSidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'"
     >
-      <div class="p-4 space-y-2">
-        <button 
-          @click="createNewChat"
-          class="w-full py-2 px-4 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center justify-center gap-2"
-        >
-          <Icon icon="lucide:plus" class="w-5 h-5" /> New Chat
-        </button>
-        <button 
-          @click="createProject"
-          class="w-full py-2 px-4 bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-white rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors flex items-center justify-center gap-2"
-        >
-          <Icon icon="lucide:folder-plus" class="w-5 h-5" /> New Project
-        </button>
-      </div>
-      
-      <div class="flex-1 overflow-y-auto px-2">
-        <draggable
-          v-model="rootItems"
-          group="sidebar"
-          item-key="id"
-          class="min-h-full pb-4"
-        >
-          <template #item="{ element }">
-            <div v-if="element.type === 'project'">
-              <SidebarProject 
-                :project="element" 
-                :active-session-id="activeSessionId"
-                @select-session="selectSession"
-                @delete-session="deleteSession"
-                @delete-project="deleteProject"
-                @toggle-project="toggleProject"
-                @rename-project="renameProject"
-                @rename-session="renameSession"
-              />
-            </div>
-            <div 
-              v-else
-              @click="selectSession(element.id)"
-              class="p-3 mb-1 rounded-lg cursor-pointer group relative"
-              :class="activeSessionId === element.id ? 'bg-gray-200 dark:bg-gray-700' : 'hover:bg-gray-100 dark:hover:bg-gray-700'"
-            >
-              <div v-if="editingSessionId === element.id" class="pr-6">
-                <input
-                  ref="sessionInput"
-                  v-model="editSessionTitle"
-                  @blur="saveSessionTitle(element.id)"
-                  @keydown.enter="saveSessionTitle(element.id)"
-                  @click.stop
-                  class="w-full px-1 py-0.5 text-sm border rounded dark:bg-gray-800 dark:border-gray-600"
-                />
-              </div>
-              <div 
-                v-else 
-                @dblclick.stop="startEditingSession(element)"
-                class="font-medium truncate pr-6 select-none"
-                title="Double click to rename"
-              >
-                {{ element.title }}
-              </div>
-              <div v-if="editingSessionId !== element.id" class="text-xs text-gray-500">{{ new Date(element.createdAt).toLocaleDateString() }}</div>
-              
-              <div class="absolute right-2 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 flex gap-1">
-                <button 
-                  v-if="editingSessionId !== element.id"
-                  @click.stop="startEditingSession(element)"
-                  class="text-gray-400 hover:text-blue-500 p-1"
-                  title="Rename"
-                >
-                  <Icon icon="lucide:pencil" class="w-3 h-3" />
-                </button>
-                <button 
-                  v-if="editingSessionId !== element.id"
-                  @click="(e) => deleteSession(element.id, e)"
-                  class="text-gray-400 hover:text-red-500 p-1"
-                  title="Delete"
-                >
-                  <Icon icon="lucide:trash-2" class="w-3 h-3" />
-                </button>
-              </div>
-            </div>
-          </template>
-        </draggable>
-      </div>
-
-      <div class="p-4 border-t border-gray-200 dark:border-gray-700">
-        <router-link to="/settings" class="flex items-center gap-2 text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100">
-          <Icon icon="lucide:settings" class="w-5 h-5" /> Settings
-        </router-link>
-      </div>
+      <SidebarNavigation @session-selected="isSidebarOpen = false" />
     </div>
 
     <!-- Main Chat Area -->
     <div class="flex-1 flex flex-col h-full relative w-full">
       <!-- Header -->
-      <div class="h-14 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between px-4 bg-white dark:bg-gray-900">
+      <div class="h-14 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between px-4 bg-transparent">
         <div class="flex items-center gap-3">
           <button 
-            @click="isSidebarOpen = !isSidebarOpen"
+            @click="router.push('/projects')"
             class="md:hidden p-2 -ml-2 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg"
           >
             <Icon icon="lucide:menu" class="w-5 h-5" />
@@ -587,44 +423,12 @@ watch(() => activeSession.value?.messages.length, () => {
         </div>
         
         <div v-if="activeSession" class="flex items-center gap-2">
-          <!-- Model Dropdown -->
-          <select 
-            :value="activeSession.modelId"
-            @change="updateModel"
-            class="text-sm border border-gray-300 dark:border-gray-600 rounded-lg px-2 py-1 bg-white dark:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-500 max-w-[120px] sm:max-w-[200px] truncate"
-            title="Select Model"
-          >
-            <option v-for="model in models" :key="model.id" :value="model.id">
-              {{ model.name }}
-            </option>
-          </select>
-
-          <!-- System Prompt Dropdown -->
-          <select 
-            :value="activeSession.systemPromptId || ''"
-            @change="updateSystemPrompt"
-            class="hidden md:block text-sm border border-gray-300 dark:border-gray-600 rounded-lg px-2 py-1 bg-white dark:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-500 max-w-[200px]"
-            title="Select System Prompt"
-          >
-            <option value="">Default System Prompt</option>
-            <option v-for="prompt in systemPrompts" :key="prompt.id" :value="prompt.id">
-              {{ prompt.name }}
-            </option>
-          </select>
-
-          <!-- Tools Selector -->
-          <ToolsSelector 
-            v-if="activeSession"
-            :session-id="activeSession.id"
-          />
-
           <button 
             @click="isFlyoutOpen = !isFlyoutOpen"
             class="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg flex items-center gap-2"
             title="Chat Settings"
           >
             <Icon icon="lucide:sliders-horizontal" class="w-5 h-5" /> 
-            <span class="hidden md:inline">Chat Settings</span>
           </button>
         </div>
       </div>
@@ -650,16 +454,16 @@ watch(() => activeSession.value?.messages.length, () => {
       </div>
 
       <!-- Input Area -->
-      <div v-if="activeSession" class="p-4 border-t border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900">
+      <div v-if="activeSession" class="p-4 border-t border-gray-200 dark:border-gray-700 bg-transparent">
         <div 
-          class="max-w-4xl mx-auto relative rounded-xl transition-colors"
+          class="max-w-4xl mx-auto relative rounded-xl border border-gray-300 dark:border-gray-600 bg-gray-50/80 dark:bg-gray-800/60 backdrop-blur-sm transition-colors focus-within:border-blue-500 focus-within:ring-1 focus-within:ring-blue-500"
           :class="{ 'bg-blue-50 dark:bg-blue-900/20 ring-2 ring-blue-500': isDragging }"
           @dragover.prevent="handleDragOver"
           @dragleave.prevent="handleDragLeave"
           @drop.prevent="handleDrop"
         >
           <!-- Attachments Preview -->
-          <div v-if="selectedAttachments.length > 0" class="flex gap-2 mb-2 overflow-x-auto pb-2">
+          <div v-if="selectedAttachments.length > 0" class="p-2 flex gap-2 overflow-x-auto border-b border-gray-200 dark:border-gray-700">
             <div 
               v-for="(file, index) in selectedAttachments" 
               :key="index"
@@ -681,39 +485,75 @@ watch(() => activeSession.value?.messages.length, () => {
             </div>
           </div>
 
-          <div class="relative">
-            <textarea 
-              v-model="userInput"
-              @keydown.enter.exact.prevent="handleSend"
-              @paste="handlePaste"
-              placeholder="Type a message..."
-              class="w-full p-3 pl-10 pr-12 rounded-xl border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
-              rows="3"
-            ></textarea>
-            
-            <!-- File Input Button -->
-            <button 
-              @click="triggerFileInput"
-              class="absolute left-3 bottom-3 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 disabled:opacity-30 disabled:cursor-not-allowed"
-              :title="isVisionSupported ? 'Attach files' : 'Model does not support vision'"
-              :disabled="!isVisionSupported"
-            >
-              📎
-            </button>
-            <input 
-              ref="fileInput"
-              type="file"
-              multiple
-              class="hidden"
-              @change="handleFileSelect"
-            />
+          <textarea 
+            v-model="userInput"
+            @keydown.enter.exact.prevent="handleSend"
+            @paste="handlePaste"
+            placeholder="Type a message..."
+            class="w-full p-3 bg-transparent outline-none resize-none max-h-64"
+            rows="3"
+          ></textarea>
+          
+          <!-- Toolbar -->
+          <div class="flex justify-between items-center p-2 pl-3">
+            <div class="flex items-center gap-2">
+                <!-- File Input Button -->
+                <button 
+                  @click="triggerFileInput"
+                  class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 disabled:opacity-30 disabled:cursor-not-allowed p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
+                  :title="isVisionSupported ? 'Attach files' : 'Model does not support vision'"
+                  :disabled="!isVisionSupported"
+                >
+                  <Icon icon="lucide:paperclip" class="w-5 h-5" />
+                </button>
+                <input 
+                  ref="fileInput"
+                  type="file"
+                  multiple
+                  class="hidden"
+                  @change="handleFileSelect"
+                />
 
+                <!-- Tools Selector -->
+                <ToolsSelector 
+                    v-if="activeSession"
+                    :session-id="activeSession.id"
+                />
+
+                <!-- Model Selector -->
+                <div class="relative group">
+                    <select 
+                        :value="activeSession.modelId"
+                        @change="updateModel"
+                        class="appearance-none pl-2 pr-8 py-1 rounded-lg text-xs font-medium bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 cursor-pointer focus:outline-none focus:ring-2 focus:ring-blue-500 max-w-[150px] truncate"
+                        title="Select Model"
+                    >
+                        <option v-for="model in models" :key="model.id" :value="model.id">
+                        {{ model.name }}
+                        </option>
+                    </select>
+                    <div class="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-gray-500">
+                        <Icon icon="lucide:chevron-down" class="w-3 h-3" />
+                    </div>
+                </div>
+            </div>
+
+            <!-- Send Button -->
             <button 
-              @click="handleSend"
-              :disabled="(!userInput.trim() && selectedAttachments.length === 0) || isGenerating"
-              class="absolute right-3 bottom-3 p-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+              v-if="isGenerating"
+              @click="stopGeneration"
+              class="p-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors"
+              title="Stop generating"
             >
-              ➤
+              <Icon icon="lucide:square" class="w-4 h-4 fill-current" />
+            </button>
+            <button 
+              v-else
+              @click="handleSend"
+              :disabled="(!userInput.trim() && selectedAttachments.length === 0)"
+              class="p-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            >
+              <Icon icon="lucide:send" class="w-4 h-4" />
             </button>
           </div>
         </div>
