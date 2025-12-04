@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, onMounted, watch } from 'vue';
+import { computed, ref, watch } from 'vue';
 import type { ChatSession } from '../stores/chat';
 import { buildTree, calculateLayout, type TreeNode, type TreeLayout } from '../utils/treeLayout';
 

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
-import type { ChatSession, Artifact } from '../stores/chat';
+import type { ChatSession } from '../stores/chat';
 import { Icon } from '@iconify/vue';
 import { renderMarkdown } from '../utils/markdown';
 import hljs from 'highlight.js';
@@ -11,7 +11,7 @@ const props = defineProps<{
   isOpen: boolean;
 }>();
 
-const emit = defineEmits<{
+defineEmits<{
   (e: 'close'): void;
 }>();
 
@@ -62,9 +62,7 @@ const isHtml = computed(() => {
   return activeArtifact.value?.type === 'text/html';
 });
 
-const isCode = computed(() => {
-  return !isHtml.value; // Treat everything else as code/text for now
-});
+
 
 const renderedContent = computed(() => {
   if (!activeArtifact.value) return '';

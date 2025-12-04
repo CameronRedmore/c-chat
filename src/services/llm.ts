@@ -176,9 +176,6 @@ export async function sendMessage(
   const clientToolNames = new Set(clientTools.map(t => t.function.name));
 
   if (model.supportsFunctionCalling) {
-    console.log('Model supports function calling, loading tools...');
-    const settingsStore = useSettingsStore();
-
     // Add client tools
     tools.push(...clientTools);
 
