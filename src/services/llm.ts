@@ -16,9 +16,6 @@ export interface UpdatePayload {
 
 export interface SamplerSettings {
   temperature?: number;
-  topP?: number;
-  topK?: number;
-  minP?: number;
 }
 
 export async function sendMessage(
@@ -254,9 +251,6 @@ export async function sendMessage(
       model: model.id,
       messages: currentMessages,
       temperature: settings.temperature,
-      top_p: settings.topP,
-      top_k: settings.topK,
-      min_p: settings.minP,
       stream: true,
     };
 

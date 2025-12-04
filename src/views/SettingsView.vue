@@ -148,7 +148,7 @@ function importSelectedModels() {
 }
 
 // Model Form
-const newModel = ref<Model>({ id: '', name: '', endpointId: '', contextSize: 4096, temperature: 0.7, topP: 1, topK: 0, minP: 0 });
+const newModel = ref<Model>({ id: '', name: '', endpointId: '', contextSize: 4096, temperature: 0.7 });
 const editingModelId = ref<string | null>(null);
 
 function saveModel() {
@@ -162,7 +162,7 @@ function saveModel() {
     settingsStore.addModel({ ...newModel.value });
   }
   
-  newModel.value = { id: '', name: '', endpointId: '', contextSize: 4096, temperature: 0.7, topP: 1, topK: 0, minP: 0 };
+  newModel.value = { id: '', name: '', endpointId: '', contextSize: 4096, temperature: 0.7 };
   editingModelId.value = null;
 }
 
@@ -172,7 +172,7 @@ function editModel(m: Model) {
 }
 
 function cancelEditModel() {
-  newModel.value = { id: '', name: '', endpointId: '', contextSize: 4096, temperature: 0.7, topP: 1, topK: 0, minP: 0 };
+  newModel.value = { id: '', name: '', endpointId: '', contextSize: 4096, temperature: 0.7 };
   editingModelId.value = null;
 }
 
@@ -515,18 +515,7 @@ async function handleRestore() {
                 <label class="block text-sm font-medium mb-1">Default Temp</label>
                 <input v-model.number="newModel.temperature" type="number" step="0.1" min="0" max="2" class="w-full px-3 py-2 rounded border dark:bg-gray-700 dark:border-gray-600" />
               </div>
-              <div>
-                <label class="block text-sm font-medium mb-1">Top P</label>
-                <input v-model.number="newModel.topP" type="number" step="0.01" min="0" max="1" class="w-full px-3 py-2 rounded border dark:bg-gray-700 dark:border-gray-600" />
-              </div>
-              <div>
-                <label class="block text-sm font-medium mb-1">Top K</label>
-                <input v-model.number="newModel.topK" type="number" step="1" min="0" class="w-full px-3 py-2 rounded border dark:bg-gray-700 dark:border-gray-600" />
-              </div>
-              <div>
-                <label class="block text-sm font-medium mb-1">Min P</label>
-                <input v-model.number="newModel.minP" type="number" step="0.01" min="0" max="1" class="w-full px-3 py-2 rounded border dark:bg-gray-700 dark:border-gray-600" />
-              </div>
+
             </div>
             <div class="flex gap-4">
               <label class="flex items-center gap-2">

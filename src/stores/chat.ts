@@ -83,9 +83,6 @@ export interface ChatSession {
   modelId: string;
   systemPromptId?: string;
   temperature?: number;
-  topP?: number;
-  topK?: number;
-  minP?: number;
   messages: Message[];
   createdAt: number;
   updatedAt: number;

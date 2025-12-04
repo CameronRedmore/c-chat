@@ -61,44 +61,6 @@ const { activeSession } = storeToRefs(chatStore);
           class="w-full"
         />
       </div>
-
-      <div>
-        <label class="block text-sm font-medium mb-1">Top P: {{ activeSession.topP ?? 'Default' }}</label>
-        <input 
-          type="range" 
-          min="0" 
-          max="1" 
-          step="0.01" 
-          :value="activeSession.topP ?? 1"
-          @input="e => { activeSession!.topP = parseFloat((e.target as HTMLInputElement).value); chatStore.save(); }"
-          class="w-full"
-        />
-      </div>
-
-      <div>
-        <label class="block text-sm font-medium mb-1">Top K: {{ activeSession.topK ?? 'Default' }}</label>
-        <input 
-          type="number" 
-          min="0" 
-          step="1" 
-          :value="activeSession.topK ?? 0"
-          @input="e => { activeSession!.topK = parseInt((e.target as HTMLInputElement).value); chatStore.save(); }"
-          class="w-full px-3 py-2 rounded border dark:bg-gray-700 dark:border-gray-600"
-        />
-      </div>
-
-      <div>
-        <label class="block text-sm font-medium mb-1">Min P: {{ activeSession.minP ?? 'Default' }}</label>
-        <input 
-          type="range" 
-          min="0" 
-          max="1" 
-          step="0.01" 
-          :value="activeSession.minP ?? 0"
-          @input="e => { activeSession!.minP = parseFloat((e.target as HTMLInputElement).value); chatStore.save(); }"
-          class="w-full"
-        />
-      </div>
     </div>
     <div v-else class="text-gray-500">
       Select a chat to configure settings.

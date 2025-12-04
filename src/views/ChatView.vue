@@ -217,9 +217,6 @@ async function triggerAssistantResponse(sessionId: string, checkTitleGeneration:
       apiMessages,
       {
         temperature: session.temperature ?? model.temperature ?? 0.7,
-        topP: session.topP ?? model.topP ?? 1,
-        topK: session.topK ?? model.topK ?? 0,
-        minP: session.minP ?? model.minP ?? 0,
       },
       (payload) => {
         if (!assistantMsg.parts) assistantMsg.parts = [];
