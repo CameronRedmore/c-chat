@@ -54,7 +54,7 @@ export const useSettingsStore = defineStore('settings', () => {
   const mcpServers = ref<McpServer[]>([]);
   const syncToken = ref<string>('');
   const lastSyncTime = ref<number>(0);
-  const updatedAt = ref<number>(Date.now());
+  const updatedAt = ref<number>(0);
   let store: Store | null = null;
 
   async function getStore() {

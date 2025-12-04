@@ -11,6 +11,7 @@ const settingsStore = useSettingsStore();
 
 const currentProjectId = ref<string | null>(null);
 const menuOpen = ref(false);
+const menuPosition = ref({ x: 0, y: 0 });
 const moveModalOpen = ref(false);
 const activeItem = ref<(Project | ChatSession) & { type: 'project' | 'session' } | null>(null);
 
@@ -106,9 +107,39 @@ function getProjectItemCount(projectId: string) {
     return chatStore.sessions.filter(s => s.projectId === projectId).length;
 }
 
-function openMenu(item: (Project | ChatSession) & { type: 'project' | 'session' }, event: Event) {
+function openMenu(item: (Project | ChatSession) & { type: 'project' | 'session' }, event: MouseEvent | Event) {
+  event.preventDefault();
   event.stopPropagation();
   activeItem.value = item;
+  
+  // Calculate position
+  let x = 0;
+  let y = 0;
+
+  if (event instanceof MouseEvent) {
+    x = event.clientX;
+    y = event.clientY;
+  } else {
+    // Fallback for non-mouse events (e.g. keyboard) - though we primarily use this for click/contextmenu
+    const target = event.target as HTMLElement;
+    const rect = target.getBoundingClientRect();
+    x = rect.right;
+    y = rect.top;
+  }
+
+  // Basic viewport clamping
+  const menuWidth = 192; // w-48 = 12rem = 192px
+  const menuHeight = 160; // Approximate height
+  
+  if (x + menuWidth > window.innerWidth) {
+    x = window.innerWidth - menuWidth - 8;
+  }
+  
+  if (y + menuHeight > window.innerHeight) {
+    y = window.innerHeight - menuHeight - 8;
+  }
+
+  menuPosition.value = { x, y };
   menuOpen.value = true;
 }
 
@@ -233,6 +264,7 @@ function openFullView() {
           v-for="item in items" 
           :key="item.id"
           @click="handleItemClick(item)"
+          @contextmenu="openMenu(item, $event)"
           class="group flex items-center gap-2 p-2 rounded-lg cursor-pointer border border-transparent hover:bg-gray-200/60 dark:hover:bg-gray-700/60 transition-colors"
           :class="{
             'bg-gray-200/60 dark:bg-gray-700/60 border-gray-300/50 dark:border-gray-600/50': item.type === 'session' && chatStore.activeSessionId === item.id
@@ -276,28 +308,27 @@ function openFullView() {
     </div>
 
     <!-- Menu Overlay -->
-    <div v-if="menuOpen" class="fixed inset-0 z-50 flex items-center justify-center p-4" @click="closeMenu">
-      <div class="absolute inset-0 bg-black/20" @click="closeMenu"></div>
-      <div class="bg-white dark:bg-gray-800 w-64 rounded-xl overflow-hidden shadow-xl relative z-10" @click.stop>
-        <div class="p-3 border-b border-gray-200 dark:border-gray-700">
-           <h3 class="font-semibold text-sm">
-             {{ activeItem?.type === 'project' ? 'Project Options' : 'Chat Options' }}
-           </h3>
-        </div>
-        <div class="flex flex-col text-sm">
-          <button @click="handleRename" class="p-3 text-left hover:bg-gray-50 dark:hover:bg-gray-700 flex items-center gap-2">
+    <div v-if="menuOpen" class="fixed inset-0 z-50" @click="closeMenu" @contextmenu.prevent="closeMenu">
+      <div 
+        class="fixed bg-white dark:bg-gray-800 w-48 rounded-lg overflow-hidden shadow-xl border border-gray-200 dark:border-gray-700 z-50"
+        :style="{ left: menuPosition.x + 'px', top: menuPosition.y + 'px' }"
+        @click.stop
+      >
+        <div class="flex flex-col text-sm py-1">
+          <button @click="handleRename" class="px-3 py-2 text-left hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2">
             <Icon icon="lucide:pencil" class="w-4 h-4" />
             Rename
           </button>
           <button 
             v-if="activeItem?.type === 'session'" 
             @click="openMoveModal" 
-            class="p-3 text-left hover:bg-gray-50 dark:hover:bg-gray-700 flex items-center gap-2"
+            class="px-3 py-2 text-left hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2"
           >
             <Icon icon="lucide:folder-input" class="w-4 h-4" />
             Move to Project
           </button>
-          <button @click="handleDelete" class="p-3 text-left hover:bg-gray-50 dark:hover:bg-gray-700 text-red-600 dark:text-red-400 flex items-center gap-2">
+          <div class="h-px bg-gray-200 dark:bg-gray-700 my-1"></div>
+          <button @click="handleDelete" class="px-3 py-2 text-left hover:bg-gray-100 dark:hover:bg-gray-700 text-red-600 dark:text-red-400 flex items-center gap-2">
             <Icon icon="lucide:trash-2" class="w-4 h-4" />
             Delete
           </button>

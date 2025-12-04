@@ -2,6 +2,7 @@
 import { ref, onMounted, onUnmounted } from 'vue';
 import { useSettingsStore, type Endpoint, type Model, type SystemPrompt, type McpServer } from '../stores/settings';
 import { syncService } from '../services/sync';
+import { backupService } from '../services/backup';
 import { storeToRefs } from 'pinia';
 import { Icon } from '@iconify/vue';
 import draggable from 'vuedraggable';
@@ -240,6 +241,53 @@ function saveSyncToken() {
     syncService.stopAutoSync();
   }
   settingsStore.save();
+}
+
+// Backup & Restore
+const isBackingUp = ref(false);
+const isRestoring = ref(false);
+const backupMessage = ref('');
+const backupError = ref(false);
+
+async function handleBackup() {
+  isBackingUp.value = true;
+  backupMessage.value = '';
+  backupError.value = false;
+  try {
+    const success = await backupService.backup();
+    if (success) {
+      backupMessage.value = 'Backup created successfully!';
+    }
+  } catch (e: any) {
+    console.error(e);
+    backupError.value = true;
+    backupMessage.value = 'Backup failed: ' + e.message;
+  } finally {
+    isBackingUp.value = false;
+  }
+}
+
+async function handleRestore() {
+  if (!confirm('Restoring will overwrite your current settings and chats. Are you sure?')) return;
+  
+  isRestoring.value = true;
+  backupMessage.value = '';
+  backupError.value = false;
+  try {
+    const success = await backupService.restore();
+    if (success) {
+      backupMessage.value = 'Restore completed successfully! Reloading...';
+      setTimeout(() => {
+        window.location.reload();
+      }, 1500);
+    }
+  } catch (e: any) {
+    console.error(e);
+    backupError.value = true;
+    backupMessage.value = 'Restore failed: ' + e.message;
+  } finally {
+    isRestoring.value = false;
+  }
 }
 </script>
 
@@ -656,6 +704,36 @@ function saveSyncToken() {
                 </button>
               </div>
             </div>
+          </div>
+        </div>
+
+        <div class="bg-gray-100 dark:bg-gray-800 p-6 rounded-xl mb-8">
+          <h4 class="font-semibold mb-4">Backup & Restore</h4>
+          <div class="space-y-4">
+            <p class="text-sm text-gray-600 dark:text-gray-400">
+              Create a local backup of all your chats and settings, or restore from a previous backup.
+            </p>
+            <div class="flex gap-4">
+              <button 
+                @click="handleBackup" 
+                :disabled="isBackingUp"
+                class="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+              >
+                <Icon v-if="isBackingUp" icon="lucide:loader-2" class="w-4 h-4 animate-spin" />
+                {{ isBackingUp ? 'Backing up...' : 'Backup Data' }}
+              </button>
+              <button 
+                @click="handleRestore" 
+                :disabled="isRestoring"
+                class="px-4 py-2 bg-yellow-600 text-white rounded hover:bg-yellow-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+              >
+                <Icon v-if="isRestoring" icon="lucide:loader-2" class="w-4 h-4 animate-spin" />
+                {{ isRestoring ? 'Restoring...' : 'Restore Data' }}
+              </button>
+            </div>
+            <p v-if="backupMessage" :class="['text-sm', backupError ? 'text-red-500' : 'text-green-500']">
+              {{ backupMessage }}
+            </p>
           </div>
         </div>
       </div>
