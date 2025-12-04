@@ -6,6 +6,8 @@ import { storeToRefs } from 'pinia';
 import { Icon } from '@iconify/vue';
 import draggable from 'vuedraggable';
 
+import { fetch } from '@tauri-apps/plugin-http';
+
 const settingsStore = useSettingsStore();
 const { endpoints, models, systemPrompts, mcpServers, syncToken, lastSyncTime } = storeToRefs(settingsStore);
 

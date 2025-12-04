@@ -23,14 +23,14 @@ const items = computed(() => {
   if (currentProjectId.value) {
     // Show sessions in this project
     return chatStore.sessions
-      .filter(s => s.projectId === currentProjectId.value)
+      .filter(s => s.projectId === currentProjectId.value && !s.isTransient)
       .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
       .map(s => ({ ...s, type: 'session' as const }));
   } else {
     // Show root projects and root sessions
     const projs = chatStore.projects.map(p => ({ ...p, type: 'project' as const }));
     const sess = chatStore.sessions
-      .filter(s => !s.projectId)
+      .filter(s => !s.projectId && !s.isTransient)
       .map(s => ({ ...s, type: 'session' as const }));
     
     return [...projs, ...sess].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
@@ -45,7 +45,7 @@ function handleItemClick(item: (Project | ChatSession) & { type: 'project' | 'se
   if (item.type === 'project') {
     currentProjectId.value = item.id;
   } else {
-    chatStore.activeSessionId = item.id;
+    chatStore.setActiveSession(item.id);
     // If on mobile, we might want to close the sidebar, but this component doesn't control that directly.
     // We can emit an event.
     emit('sessionSelected');
@@ -75,6 +75,15 @@ function createNewChat() {
           chatStore.save();
       }
   }
+  emit('sessionSelected');
+}
+
+function createTransientChat() {
+  if (settingsStore.models.length === 0) {
+    alert('Please add a model in Settings first.');
+    return;
+  }
+  chatStore.createSession(settingsStore.models[0].id, undefined, undefined, { isTransient: true });
   emit('sessionSelected');
 }
 
@@ -196,6 +205,16 @@ function openFullView() {
           class="flex-1 py-1.5 px-2 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700 transition-colors flex items-center justify-center gap-1.5"
         >
           <Icon icon="lucide:plus" class="w-4 h-4" /> New Chat
+        </button>
+        <button 
+            @click="createTransientChat"
+            class="py-1.5 px-2 text-sm rounded-lg transition-colors flex items-center justify-center"
+            :class="chatStore.activeSession?.isTransient 
+              ? 'bg-purple-100 text-purple-600 dark:bg-purple-900/30 dark:text-purple-400' 
+              : 'bg-gray-200/60 dark:bg-gray-700/60 text-gray-800 dark:text-white hover:bg-gray-300/60 dark:hover:bg-gray-600/60'"
+            title="New Transient Chat"
+        >
+            <Icon icon="lucide:ghost" class="w-4 h-4" />
         </button>
         <button 
           @click="createProject"

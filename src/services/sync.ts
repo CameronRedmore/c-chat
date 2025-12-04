@@ -218,7 +218,8 @@ export class SyncService {
         // List all chat keys
         const prefix = 'chat:';
         const remoteKeys = await this.listKeys(prefix);
-        const localSessions = this.chatStore.sessions;
+        // Filter out transient sessions from local list so we don't consider them for sync
+        const localSessions = this.chatStore.sessions.filter(s => !s.isTransient);
         const deletedSessions = this.chatStore.deletedSessions;
 
         // 1. Handle Remote to Local (Download)
@@ -227,7 +228,7 @@ export class SyncService {
 
             const localSession = localSessions.find(s => s.id === chatId);
             const localDeleted = deletedSessions.find(s => s.id === chatId);
-            
+
             const localUpdatedAt = localSession ? localSession.updatedAt : (localDeleted ? localDeleted.deletedAt : 0);
             const remoteUpdatedAt = new Date(meta.updated_at).getTime();
 
@@ -241,18 +242,18 @@ export class SyncService {
                             // Remove from sessions
                             const idx = this.chatStore.sessions.findIndex(s => s.id === chatId);
                             if (idx !== -1) this.chatStore.sessions.splice(idx, 1);
-                            
+
                             // Add to deletedSessions with REMOTE timestamp to avoid re-upload
                             const delIdx = this.chatStore.deletedSessions.findIndex(s => s.id === chatId);
                             if (delIdx === -1) {
-                                this.chatStore.deletedSessions.push({ 
-                                    id: chatId, 
-                                    deletedAt: remoteUpdatedAt 
+                                this.chatStore.deletedSessions.push({
+                                    id: chatId,
+                                    deletedAt: remoteUpdatedAt
                                 });
                             } else {
                                 this.chatStore.deletedSessions[delIdx].deletedAt = remoteUpdatedAt;
                             }
-                            
+
                             if (this.chatStore.activeSessionId === chatId) {
                                 this.chatStore.activeSessionId = null;
                             }
@@ -302,10 +303,10 @@ export class SyncService {
 
             if (!meta || localUpdatedAt > new Date(meta.updated_at).getTime()) {
                 console.log(`Uploading tombstone for chat ${tombstone.id}...`);
-                await this.setValue(key, { 
-                    id: tombstone.id, 
-                    deleted: true, 
-                    updatedAt: localUpdatedAt 
+                await this.setValue(key, {
+                    id: tombstone.id,
+                    deleted: true,
+                    updatedAt: localUpdatedAt
                 });
             }
         }
@@ -387,10 +388,10 @@ export class SyncService {
 
             if (!meta || localUpdatedAt > new Date(meta.updated_at).getTime()) {
                 console.log(`Uploading tombstone for project ${tombstone.id}...`);
-                await this.setValue(key, { 
-                    id: tombstone.id, 
-                    deleted: true, 
-                    updatedAt: localUpdatedAt 
+                await this.setValue(key, {
+                    id: tombstone.id,
+                    deleted: true,
+                    updatedAt: localUpdatedAt
                 });
             }
         }

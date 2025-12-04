@@ -1,7 +1,10 @@
 import type { Endpoint, Model } from '../stores/settings';
 import type { Message, ToolCall, ToolResult, EnabledMcpTool } from '../stores/chat';
 import { useSettingsStore } from '../stores/settings';
+import { useChatStore } from '../stores/chat';
 import { getMcpClient, type McpTool } from './mcp';
+import { clientTools, handleClientToolCall } from './clientTools';
+import { parsePartialJson } from '../utils/partialJson';
 import { fetch } from '@tauri-apps/plugin-http';
 
 export interface UpdatePayload {
@@ -24,6 +27,7 @@ export async function sendMessage(
   messages: Message[],
   settings: SamplerSettings,
   onUpdate: (payload: UpdatePayload) => void,
+  sessionId: string,
   enabledMcpTools?: EnabledMcpTool[], // Tools enabled for this specific chat
   signal?: AbortSignal
 ) {
@@ -69,11 +73,17 @@ export async function sendMessage(
 
           // Add tool result
           const toolName = m.parts.find(p => p.type === 'tool-call' && p.toolCall?.id === part.toolResult?.callId)?.toolCall?.name;
+
+          let content = typeof part.toolResult.result === 'string' ? part.toolResult.result : JSON.stringify(part.toolResult.result);
+          if (toolName === 'read_artifact') {
+            content = '(Artifact content hidden to save context. Read again if needed.)';
+          }
+
           apiMessages.push({
             role: 'tool',
             tool_call_id: part.toolResult.callId,
             name: toolName,
-            content: typeof part.toolResult.result === 'string' ? part.toolResult.result : JSON.stringify(part.toolResult.result)
+            content: content
           });
         }
       }
@@ -143,11 +153,18 @@ export async function sendMessage(
 
     if (m.toolResults) {
       for (const res of m.toolResults) {
+        const toolName = m.toolCalls?.find(tc => tc.id === res.callId)?.name;
+        let content = typeof res.result === 'string' ? res.result : JSON.stringify(res.result);
+
+        if (toolName === 'read_artifact') {
+          content = '(Artifact content hidden to save context. Read again if needed.)';
+        }
+
         apiMessages.push({
           role: 'tool',
           tool_call_id: res.callId,
-          name: m.toolCalls?.find(tc => tc.id === res.callId)?.name,
-          content: typeof res.result === 'string' ? res.result : JSON.stringify(res.result)
+          name: toolName,
+          content: content
         });
       }
     }
@@ -156,10 +173,14 @@ export async function sendMessage(
   // Prepare tools if supported
   let tools: any[] = [];
   const mcpToolsMap = new Map<string, { serverId: string, tool: McpTool }>();
+  const clientToolNames = new Set(clientTools.map(t => t.function.name));
 
   if (model.supportsFunctionCalling) {
     console.log('Model supports function calling, loading tools...');
     const settingsStore = useSettingsStore();
+
+    // Add client tools
+    tools.push(...clientTools);
 
     // Use enabled tools from chat session if provided, otherwise use all enabled servers
     if (enabledMcpTools && enabledMcpTools.length > 0) {
@@ -307,6 +328,41 @@ export async function sendMessage(
                   if (tc.id) current.id = tc.id;
                   if (tc.function?.name) current.function.name += tc.function.name;
                   if (tc.function?.arguments) current.function.arguments += tc.function.arguments;
+
+                  // Streaming Artifact Update
+                  if (current.function.name === 'create_artifact' || current.function.name === 'update_artifact') {
+                    try {
+                      const partialArgs = parsePartialJson(current.function.arguments);
+                      if (partialArgs && (partialArgs.content || partialArgs.title)) {
+                        const chatStore = useChatStore();
+                        if (partialArgs.id) {
+                          // We need to construct a partial artifact
+                          // But createArtifact expects a full Artifact object or we need a new method.
+                          // However, we modified createArtifact to handle upserts.
+                          // So we can pass what we have.
+                          // We need to ensure we don't overwrite with undefined.
+                          // The upsert logic in chat.ts checks for fields presence.
+
+                          // Construct a partial object that satisfies the type but has undefineds
+                          // We can cast it.
+                          const artifactUpdate: any = {
+                            id: partialArgs.id,
+                            title: partialArgs.title,
+                            type: partialArgs.type,
+                            content: partialArgs.content,
+                            // We don't have createdAt/updatedAt here, store handles updatedAt
+                          };
+
+                          // Only call if we have an ID
+                          if (artifactUpdate.id) {
+                            chatStore.createArtifact(sessionId, artifactUpdate, true);
+                          }
+                        }
+                      }
+                    } catch (e) {
+                      // Ignore parse errors during streaming
+                    }
+                  }
                 }
               }
             }
@@ -357,7 +413,14 @@ export async function sendMessage(
         let isError = false;
         const mcpTool = mcpToolsMap.get(toolName);
 
-        if (mcpTool) {
+        if (clientToolNames.has(toolName)) {
+          try {
+            result = await handleClientToolCall(toolName, args, sessionId);
+          } catch (e: any) {
+            result = `Error executing client tool: ${e.message}`;
+            isError = true;
+          }
+        } else if (mcpTool) {
           try {
             const server = settingsStore.mcpServers.find(s => s.id === mcpTool.serverId);
             if (server) {

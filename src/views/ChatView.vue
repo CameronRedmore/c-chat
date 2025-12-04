@@ -8,17 +8,21 @@ import SidebarNavigation from '../components/SidebarNavigation.vue';
 import ToolsSelector from '../components/ToolsSelector.vue';
 import MessageBubble from '../components/MessageBubble.vue';
 import ChatSettingsFlyout from '../components/ChatSettingsFlyout.vue';
+import ConversationTree from '../components/ConversationTree.vue';
+import ArtifactsPanel from '../components/ArtifactsPanel.vue';
 import { sendMessage } from '../services/llm';
 import { Icon } from '@iconify/vue';
 
 const router = useRouter();
 const chatStore = useChatStore();
 const settingsStore = useSettingsStore();
-const { activeSession, isGenerating } = storeToRefs(chatStore);
+const { activeSession, activeThread, isGenerating } = storeToRefs(chatStore);
 const { models, endpoints, systemPrompts } = storeToRefs(settingsStore);
 
 const userInput = ref('');
 const isFlyoutOpen = ref(false);
+const isTreeViewOpen = ref(false);
+const isArtifactsOpen = ref(false);
 const abortController = ref<AbortController | null>(null);
 const messagesContainer = ref<HTMLElement | null>(null);
 const fileInput = ref<HTMLInputElement | null>(null);
@@ -150,7 +154,7 @@ Title:`;
   try {
     await sendMessage(endpoint, model, messages, { temperature: 0.7 }, (payload) => {
        if (payload.content) title += payload.content;
-    });
+    }, sessionId); // Pass sessionId
     
     if (title.trim()) {
        chatStore.updateSessionSettings(sessionId, { title: title.trim().replace(/^["']|["']$/g, '') });
@@ -185,6 +189,7 @@ async function triggerAssistantResponse(sessionId: string, checkTitleGeneration:
     model: model.name,
     parts: []
   };
+  
   const assistantMsg = chatStore.addMessage(sessionId, initialAssistantMsg);
 
   if (!assistantMsg) {
@@ -202,7 +207,8 @@ async function triggerAssistantResponse(sessionId: string, checkTitleGeneration:
   if (systemPromptContent) {
     apiMessages.push({ role: 'system', content: systemPromptContent, timestamp: 0 } as Message);
   }
-  apiMessages.push(...session.messages.slice(0, -1));
+  
+  apiMessages.push(...activeThread.value.slice(0, -1));
 
   try {
     await sendMessage(
@@ -266,6 +272,7 @@ async function triggerAssistantResponse(sessionId: string, checkTitleGeneration:
         }
         scrollToBottom();
       },
+      session.id, // Pass session.id
       session.enabledMcpTools,
       abortController.value?.signal
     );
@@ -302,7 +309,6 @@ async function triggerAssistantResponse(sessionId: string, checkTitleGeneration:
       assistantMsg.tokensPerSecond = estimatedTokens / (duration / 1000);
     }
 
-    // Update session timestamp to ensure it's treated as the latest version during sync
     chatStore.updateSessionSettings(sessionId, {});
 
     isGenerating.value = false;
@@ -325,7 +331,6 @@ async function handleSend() {
   userInput.value = '';
   selectedAttachments.value = [];
 
-  // Add user message
   const userMsg: Message = {
     role: 'user',
     content,
@@ -334,7 +339,6 @@ async function handleSend() {
   };
   chatStore.addMessage(sessionId, userMsg);
 
-  // Scroll to bottom
   await nextTick();
   scrollToBottom();
 
@@ -345,19 +349,19 @@ async function handleRegenerate(messageId: string) {
   if (!activeSession.value || isGenerating.value) return;
   
   const session = activeSession.value;
-  const messageIndex = session.messages.findIndex(m => m.id === messageId);
-  if (messageIndex === -1) return;
-  
-  const message = session.messages[messageIndex];
+  const message = session.messages.find(m => m.id === messageId);
+  if (!message) return;
   
   if (message.role === 'user') {
-    chatStore.deleteMessagesAfter(session.id, messageId, false);
+    session.currentLeafId = messageId;
+    chatStore.save();
     await triggerAssistantResponse(session.id);
+    
   } else if (message.role === 'assistant') {
-    chatStore.deleteMessagesAfter(session.id, messageId, true);
-    if (session.messages.length > 0) {
-       await triggerAssistantResponse(session.id);
-    }
+    const parentId = message.parentId;
+    session.currentLeafId = parentId || null;
+    chatStore.save();
+    await triggerAssistantResponse(session.id);
   }
 }
 
@@ -379,14 +383,63 @@ function handleEditMessage(messageId: string, newContent: string) {
   }
 }
 
+function handleNavigateBranch(messageId: string, direction: 'prev' | 'next') {
+    if (activeSession.value) {
+        chatStore.navigateBranch(activeSession.value.id, messageId, direction);
+    }
+}
+
 function updateModel(event: Event) {
   if (!activeSession.value) return;
   const select = event.target as HTMLSelectElement;
   chatStore.updateSessionSettings(activeSession.value.id, { modelId: select.value });
 }
 
-watch(() => activeSession.value?.messages.length, () => {
+function getBranchInfo(message: Message) {
+  if (!activeSession.value) return { index: 0, count: 0 };
+  
+  const session = activeSession.value;
+  let siblings: string[] = [];
+  
+  if (message.parentId) {
+    const parent = session.messages.find(m => m.id === message.parentId);
+    if (parent && parent.childrenIds) {
+      siblings = parent.childrenIds;
+    }
+  } else {
+    siblings = session.messages
+      .filter(m => !m.parentId)
+      .map(m => m.id!);
+  }
+  
+  if (siblings.length <= 1) return { index: 0, count: 0 };
+  
+  const index = siblings.indexOf(message.id!) + 1;
+  return { index, count: siblings.length };
+}
+
+function handleTreeSelection(messageId: string) {
+  if (!activeSession.value) return;
+  chatStore.setCurrentLeaf(activeSession.value.id, messageId);
+  isTreeViewOpen.value = false;
+}
+
+watch(() => activeThread.value.length, () => {
   nextTick(scrollToBottom);
+});
+
+// Auto-open artifacts panel when a new artifact is added
+watch(() => activeSession.value?.artifacts?.length, (newLen, oldLen) => {
+  if (newLen && newLen > (oldLen || 0)) {
+    isArtifactsOpen.value = true;
+  }
+});
+
+// Auto-close artifacts panel when switching to a chat without artifacts
+watch(() => activeSession.value?.id, () => {
+  if (activeSession.value && (!activeSession.value.artifacts || activeSession.value.artifacts.length === 0)) {
+    isArtifactsOpen.value = false;
+  }
 });
 </script>
 
@@ -424,6 +477,22 @@ watch(() => activeSession.value?.messages.length, () => {
         
         <div v-if="activeSession" class="flex items-center gap-2">
           <button 
+            @click="isTreeViewOpen = !isTreeViewOpen"
+            class="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg flex items-center gap-2"
+            :class="{ 'bg-gray-100 dark:bg-gray-800 text-blue-600': isTreeViewOpen }"
+            title="Toggle Tree View"
+          >
+            <Icon icon="lucide:git-branch" class="w-5 h-5" /> 
+          </button>
+          <button 
+            @click="isArtifactsOpen = !isArtifactsOpen"
+            class="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg flex items-center gap-2"
+            :class="{ 'bg-gray-100 dark:bg-gray-800 text-blue-600': isArtifactsOpen }"
+            title="Toggle Artifacts"
+          >
+            <Icon icon="lucide:box" class="w-5 h-5" /> 
+          </button>
+          <button 
             @click="isFlyoutOpen = !isFlyoutOpen"
             class="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg flex items-center gap-2"
             title="Chat Settings"
@@ -433,8 +502,17 @@ watch(() => activeSession.value?.messages.length, () => {
         </div>
       </div>
 
+      <!-- Tree View Overlay -->
+      <div v-if="isTreeViewOpen && activeSession" class="flex-1 relative overflow-hidden bg-gray-50 dark:bg-gray-900 z-10">
+        <ConversationTree 
+          :session="activeSession" 
+          @select-message="handleTreeSelection"
+        />
+      </div>
+
       <!-- Messages -->
       <div 
+        v-else
         ref="messagesContainer"
         class="flex-1 overflow-y-auto p-4 space-y-4"
       >
@@ -443,12 +521,15 @@ watch(() => activeSession.value?.messages.length, () => {
         </div>
         <template v-else>
           <MessageBubble 
-            v-for="(msg, index) in activeSession.messages" 
-            :key="index" 
+            v-for="(msg, index) in activeThread" 
+            :key="msg.id || index" 
             :message="msg" 
+            :branch-index="getBranchInfo(msg).index"
+            :branch-count="getBranchInfo(msg).count"
             @delete="handleDeleteMessage(msg.id!)"
             @edit="handleEditMessage(msg.id!, $event)"
             @regenerate="handleRegenerate(msg.id!)"
+            @navigate="handleNavigateBranch(msg.id!, $event)"
           />
         </template>
       </div>
@@ -516,8 +597,8 @@ watch(() => activeSession.value?.messages.length, () => {
 
                 <!-- Tools Selector -->
                 <ToolsSelector 
-                    v-if="activeSession"
-                    :session-id="activeSession.id"
+                  v-if="activeSession"
+                  :session-id="activeSession.id"
                 />
 
                 <!-- Model Selector -->
@@ -558,6 +639,18 @@ watch(() => activeSession.value?.messages.length, () => {
           </div>
         </div>
       </div>
+    </div>
+
+    <!-- Artifacts Panel (Desktop: Side, Mobile: Overlay) -->
+    <div 
+      v-if="activeSession && isArtifactsOpen"
+      class="fixed inset-0 z-40 md:static md:z-0 md:w-1/2 lg:w-2/5 border-l border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 transition-all duration-300 ease-in-out shadow-xl md:shadow-none"
+    >
+      <ArtifactsPanel 
+        :session="activeSession" 
+        :is-open="isArtifactsOpen"
+        @close="isArtifactsOpen = false"
+      />
     </div>
 
     <!-- Flyout -->

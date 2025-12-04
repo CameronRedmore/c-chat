@@ -21,14 +21,14 @@ const items = computed(() => {
   if (currentProjectId.value) {
     // Show sessions in this project
     return chatStore.sessions
-      .filter(s => s.projectId === currentProjectId.value)
+      .filter(s => s.projectId === currentProjectId.value && !s.isTransient)
       .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
       .map(s => ({ ...s, type: 'session' as const }));
   } else {
     // Show root projects and root sessions
     const projs = chatStore.projects.map(p => ({ ...p, type: 'project' as const }));
     const sess = chatStore.sessions
-      .filter(s => !s.projectId)
+      .filter(s => !s.projectId && !s.isTransient)
       .map(s => ({ ...s, type: 'session' as const }));
     
     return [...projs, ...sess].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
@@ -78,6 +78,18 @@ function createNewChat() {
             chatStore.save();
         }
     }
+    router.push('/');
+  });
+}
+
+function createTransientChat() {
+  import('../stores/settings').then(({ useSettingsStore }) => {
+    const settingsStore = useSettingsStore();
+    if (settingsStore.models.length === 0) {
+      alert('Please add a model in Settings first.');
+      return;
+    }
+    chatStore.createSession(settingsStore.models[0].id, undefined, undefined, { isTransient: true });
     router.push('/');
   });
 }
@@ -180,12 +192,20 @@ function handleMove(targetProjectId: string | null) {
       </div>
       
       <div class="flex items-center gap-2">
-         <button 
+        <button 
           @click="createProject"
           class="p-2 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg"
           title="New Project"
         >
           <Icon icon="lucide:folder-plus" class="w-5 h-5" />
+        </button>
+        <button 
+            @click="createTransientChat"
+            class="p-2 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg"
+            :class="chatStore.activeSession?.isTransient ? 'text-purple-600 dark:text-purple-400 bg-purple-50 dark:bg-purple-900/20' : ''"
+            title="New Transient Chat"
+        >
+            <Icon icon="lucide:ghost" class="w-5 h-5" />
         </button>
         <button 
           @click="createNewChat"

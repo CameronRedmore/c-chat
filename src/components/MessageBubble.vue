@@ -5,12 +5,15 @@ import type { Message } from '../stores/chat';
 
 const props = defineProps<{
   message: Message;
+  branchIndex?: number;
+  branchCount?: number;
 }>();
 
 const emit = defineEmits<{
   (e: 'delete'): void;
   (e: 'edit', content: string): void;
   (e: 'regenerate'): void;
+  (e: 'navigate', direction: 'prev' | 'next'): void;
 }>();
 
 const showRaw = ref(false);
@@ -244,20 +247,42 @@ function saveEdit() {
     </div>
 
     <!-- Footer Info -->
-    <div class="mt-2 text-xs text-gray-400 dark:text-gray-500 flex flex-wrap justify-end items-center gap-3">
-      <template v-if="message.role === 'assistant'">
-        <div v-if="message.model" class="flex items-center gap-1">
-          <span>🤖</span> {{ message.model }}
+    <div class="mt-2 text-xs text-gray-400 dark:text-gray-500 flex flex-wrap justify-between items-center gap-3">
+      <!-- Branch Navigation -->
+      <div v-if="branchCount && branchCount > 1" class="flex items-center gap-1 bg-black/5 dark:bg-white/5 rounded px-1.5 py-0.5">
+        <button 
+          @click="$emit('navigate', 'prev')"
+          class="hover:text-gray-700 dark:hover:text-gray-300 px-1 disabled:opacity-30"
+          :disabled="branchIndex === 1"
+        >
+          &lt;
+        </button>
+        <span class="font-medium">{{ branchIndex }} / {{ branchCount }}</span>
+        <button 
+          @click="$emit('navigate', 'next')"
+          class="hover:text-gray-700 dark:hover:text-gray-300 px-1 disabled:opacity-30"
+          :disabled="branchIndex === branchCount"
+        >
+          &gt;
+        </button>
+      </div>
+      <div v-else></div> <!-- Spacer -->
+
+      <div class="flex items-center gap-3">
+        <template v-if="message.role === 'assistant'">
+          <div v-if="message.model" class="flex items-center gap-1">
+            <span>🤖</span> {{ message.model }}
+          </div>
+          <div v-if="message.generationTime" class="flex items-center gap-1" title="Generation Time">
+            <span>⏱️</span> {{ (message.generationTime / 1000).toFixed(2) }}s
+          </div>
+          <div v-if="message.tokensPerSecond" class="flex items-center gap-1" title="Tokens per second (estimated)">
+            <span>⚡</span> {{ message.tokensPerSecond.toFixed(1) }} t/s
+          </div>
+        </template>
+        <div class="flex items-center gap-1" title="Message Timestamp">
+          <span>🕒</span> {{ new Date(message.timestamp).toLocaleTimeString() }}
         </div>
-        <div v-if="message.generationTime" class="flex items-center gap-1" title="Generation Time">
-          <span>⏱️</span> {{ (message.generationTime / 1000).toFixed(2) }}s
-        </div>
-        <div v-if="message.tokensPerSecond" class="flex items-center gap-1" title="Tokens per second (estimated)">
-          <span>⚡</span> {{ message.tokensPerSecond.toFixed(1) }} t/s
-        </div>
-      </template>
-      <div class="flex items-center gap-1" title="Message Timestamp">
-        <span>🕒</span> {{ new Date(message.timestamp).toLocaleTimeString() }}
       </div>
     </div>
   </div>
