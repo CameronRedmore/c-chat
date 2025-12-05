@@ -127,5 +127,6 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           tag_name: app-v${{ steps.get_version.outputs.VERSION }}
+          draft: true
           files: |
             src-tauri/gen/android/app/build/outputs/apk/**/*.apk
