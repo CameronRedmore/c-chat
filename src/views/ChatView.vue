@@ -10,33 +10,23 @@ import MessageBubble from '../components/MessageBubble.vue';
 import ChatSettingsFlyout from '../components/ChatSettingsFlyout.vue';
 import ConversationTree from '../components/ConversationTree.vue';
 import ArtifactsPanel from '../components/ArtifactsPanel.vue';
-import { sendMessage } from '../services/llm';
 import { Icon } from '@iconify/vue';
 
 const router = useRouter();
 const chatStore = useChatStore();
 const settingsStore = useSettingsStore();
 const { activeSession, activeThread, isGenerating } = storeToRefs(chatStore);
-const { models, endpoints, systemPrompts } = storeToRefs(settingsStore);
+const { models } = storeToRefs(settingsStore);
 
 const userInput = ref('');
 const isFlyoutOpen = ref(false);
 const isTreeViewOpen = ref(false);
 const isArtifactsOpen = ref(false);
-const abortController = ref<AbortController | null>(null);
 const messagesContainer = ref<HTMLElement | null>(null);
 const fileInput = ref<HTMLInputElement | null>(null);
 const selectedAttachments = ref<Attachment[]>([]);
 const isDragging = ref(false);
 const isSidebarOpen = ref(false);
-
-function stopGeneration() {
-  if (abortController.value) {
-    abortController.value.abort();
-    abortController.value = null;
-    isGenerating.value = false;
-  }
-}
 
 const currentModel = computed(() => {
   if (!activeSession.value) return null;
@@ -54,7 +44,7 @@ function triggerFileInput() {
 
 async function processFiles(files: FileList | File[]) {
   if (!isVisionSupported.value) return;
-  
+
   for (const file of Array.from(files)) {
     const reader = new FileReader();
     reader.onload = (e) => {
@@ -65,7 +55,7 @@ async function processFiles(files: FileList | File[]) {
         content: content
       });
     };
-    
+
     if (file.type.startsWith('image/')) {
       reader.readAsDataURL(file);
     } else {
@@ -91,7 +81,7 @@ function handleDragOver() {
 function handleDrop(event: DragEvent) {
   isDragging.value = false;
   if (!isVisionSupported.value) return;
-  
+
   const files = event.dataTransfer?.files;
   if (files && files.length > 0) {
     processFiles(files);
@@ -101,7 +91,7 @@ function handleDrop(event: DragEvent) {
 function handleDragLeave(event: DragEvent) {
   const relatedTarget = event.relatedTarget as Node | null;
   const currentTarget = event.currentTarget as Node | null;
-  
+
   if (currentTarget instanceof Node && relatedTarget instanceof Node && currentTarget.contains(relatedTarget)) {
     return;
   }
@@ -110,18 +100,18 @@ function handleDragLeave(event: DragEvent) {
 
 function handlePaste(event: ClipboardEvent) {
   if (!isVisionSupported.value) return;
-  
+
   const items = event.clipboardData?.items;
   if (!items) return;
 
   const files: File[] = [];
   for (const item of items) {
     if (item.kind === 'file') {
-      const file = item.getAsFile();
-      if (file) files.push(file);
+      const itemFile = item.getAsFile();
+      if (itemFile) files.push(itemFile);
     }
   }
-  
+
   if (files.length > 0) {
     processFiles(files);
   }
@@ -131,235 +121,31 @@ function removeAttachment(index: number) {
   selectedAttachments.value.splice(index, 1);
 }
 
-async function generateChatTitle(sessionId: string, userContent: string, assistantContent: string) {
-  const session = chatStore.sessions.find(s => s.id === sessionId);
-  if (!session) return;
-
-  const model = models.value.find(m => m.id === session.modelId);
-  if (!model) return;
-  
-  const endpoint = endpoints.value.find(e => e.id === model.endpointId);
-  if (!endpoint) return;
-
-  const titlePrompt = `Generate a short, concise title (max 5-6 words) for a chat that starts with this exchange. Do not use quotes.
-User: ${userContent.substring(0, 500)}
-Assistant: ${assistantContent.substring(0, 500)}
-Title:`;
-
-  const messages: Message[] = [
-    { role: 'user', content: titlePrompt, timestamp: Date.now() }
-  ];
-
-  let title = '';
-  try {
-    await sendMessage(endpoint, model, messages, { temperature: 0.7 }, (payload) => {
-       if (payload.content) title += payload.content;
-    }, sessionId); // Pass sessionId
-    
-    if (title.trim()) {
-       chatStore.updateSessionSettings(sessionId, { title: title.trim().replace(/^["']|["']$/g, '') });
-    }
-  } catch (e) {
-    console.error('Failed to generate title', e);
-  }
-}
-
-async function triggerAssistantResponse(sessionId: string, checkTitleGeneration: boolean = false, userContentForTitle: string = '') {
-  const session = chatStore.sessions.find(s => s.id === sessionId);
-  if (!session) return;
-
-  const model = models.value.find(m => m.id === session.modelId);
-  if (!model) {
-    isGenerating.value = false;
-    return;
-  }
-  const endpoint = endpoints.value.find(e => e.id === model.endpointId);
-  if (!endpoint) {
-    isGenerating.value = false;
-    return;
-  }
-
-  isGenerating.value = true;
-  abortController.value = new AbortController();
-  const startTime = Date.now();
-  const initialAssistantMsg: Message = {
-    role: 'assistant',
-    content: '',
-    timestamp: startTime,
-    model: model.name,
-    parts: []
-  };
-  
-  const assistantMsg = chatStore.addMessage(sessionId, initialAssistantMsg);
-
-  if (!assistantMsg) {
-    isGenerating.value = false;
-    return;
-  }
-
-  let systemPromptContent = '';
-  if (session.systemPromptId) {
-    const prompt = systemPrompts.value.find(p => p.id === session.systemPromptId);
-    if (prompt) systemPromptContent = prompt.content;
-  }
-
-  const apiMessages = [];
-  if (systemPromptContent) {
-    apiMessages.push({ role: 'system', content: systemPromptContent, timestamp: 0 } as Message);
-  }
-  
-  apiMessages.push(...activeThread.value.slice(0, -1));
-
-  try {
-    await sendMessage(
-      endpoint,
-      model,
-      apiMessages,
-      {
-        temperature: session.temperature ?? model.temperature ?? 0.7,
-      },
-      (payload) => {
-        if (!assistantMsg.parts) assistantMsg.parts = [];
-        const parts = assistantMsg.parts;
-        const lastPart = parts[parts.length - 1];
-
-        if (payload.reasoning) {
-          if (lastPart && lastPart.type === 'reasoning') {
-            lastPart.content = (lastPart.content || '') + payload.reasoning;
-          } else {
-            parts.push({
-              id: crypto.randomUUID(),
-              type: 'reasoning',
-              content: payload.reasoning
-            });
-          }
-          assistantMsg.reasoning = (assistantMsg.reasoning || '') + payload.reasoning;
-        }
-        if (payload.content) {
-          if (lastPart && lastPart.type === 'text') {
-            lastPart.content = (lastPart.content || '') + payload.content;
-          } else {
-            parts.push({
-              id: crypto.randomUUID(),
-              type: 'text',
-              content: payload.content
-            });
-          }
-          assistantMsg.content += payload.content;
-        }
-        if (payload.toolCalls) {
-          for (const tc of payload.toolCalls) {
-            parts.push({
-              id: crypto.randomUUID(),
-              type: 'tool-call',
-              toolCall: tc
-            });
-          }
-          assistantMsg.toolCalls = [...(assistantMsg.toolCalls || []), ...payload.toolCalls];
-        }
-        if (payload.toolResults) {
-          for (const tr of payload.toolResults) {
-            parts.push({
-              id: crypto.randomUUID(),
-              type: 'tool-result',
-              toolResult: tr
-            });
-          }
-          assistantMsg.toolResults = [...(assistantMsg.toolResults || []), ...payload.toolResults];
-        }
-        scrollToBottom();
-      },
-      session.id, // Pass session.id
-      session.enabledMcpTools,
-      abortController.value?.signal
-    );
-  } catch (e) {
-    assistantMsg.content += `\n\nError: ${e}`;
-    if (assistantMsg.parts) {
-      assistantMsg.parts.push({
-        id: crypto.randomUUID(),
-        type: 'text',
-        content: `\n\nError: ${e}`
-      });
-    }
-  } finally {
-    abortController.value = null;
-    const endTime = Date.now();
-    const duration = endTime - startTime;
-    assistantMsg.generationTime = duration;
-    
-    let totalChars = assistantMsg.content.length;
-    if (assistantMsg.reasoning) {
-      totalChars += assistantMsg.reasoning.length;
-    }
-    if (assistantMsg.toolCalls) {
-      for (const toolCall of assistantMsg.toolCalls) {
-        totalChars += toolCall.name.length;
-        if (toolCall.arguments) {
-          totalChars += JSON.stringify(toolCall.arguments).length;
-        }
-      }
-    }
-
-    const estimatedTokens = totalChars / 4;
-    if (duration > 0) {
-      assistantMsg.tokensPerSecond = estimatedTokens / (duration / 1000);
-    }
-
-    chatStore.updateSessionSettings(sessionId, {});
-
-    isGenerating.value = false;
-    chatStore.save();
-
-    if (checkTitleGeneration && assistantMsg.content && !assistantMsg.content.startsWith('Error:')) {
-      generateChatTitle(sessionId, userContentForTitle, assistantMsg.content);
-    }
-  }
-}
-
 async function handleSend() {
   if ((!userInput.value.trim() && selectedAttachments.value.length === 0) || !activeSession.value || isGenerating.value) return;
 
   const sessionId = activeSession.value.id;
-  const isFirstMessage = activeSession.value.messages.length === 0;
   const content = userInput.value;
   const attachments = [...selectedAttachments.value];
-  
+
   userInput.value = '';
   selectedAttachments.value = [];
 
-  const userMsg: Message = {
-    role: 'user',
-    content,
-    timestamp: Date.now(),
-    attachments
-  };
-  chatStore.addMessage(sessionId, userMsg);
+  await chatStore.sendUserMessage(sessionId, content, attachments, () => {
+    scrollToBottom();
+  });
+}
 
-  await nextTick();
-  scrollToBottom();
-
-  await triggerAssistantResponse(sessionId, isFirstMessage, content);
+function stopGeneration() {
+  chatStore.stopGeneration();
 }
 
 async function handleRegenerate(messageId: string) {
   if (!activeSession.value || isGenerating.value) return;
-  
-  const session = activeSession.value;
-  const message = session.messages.find(m => m.id === messageId);
-  if (!message) return;
-  
-  if (message.role === 'user') {
-    session.currentLeafId = messageId;
-    chatStore.save();
-    await triggerAssistantResponse(session.id);
-    
-  } else if (message.role === 'assistant') {
-    const parentId = message.parentId;
-    session.currentLeafId = parentId || null;
-    chatStore.save();
-    await triggerAssistantResponse(session.id);
-  }
+
+  await chatStore.regenerateMessage(activeSession.value.id, messageId, () => {
+    scrollToBottom();
+  });
 }
 
 function scrollToBottom() {
@@ -381,9 +167,9 @@ function handleEditMessage(messageId: string, newContent: string) {
 }
 
 function handleNavigateBranch(messageId: string, direction: 'prev' | 'next') {
-    if (activeSession.value) {
-        chatStore.navigateBranch(activeSession.value.id, messageId, direction);
-    }
+  if (activeSession.value) {
+    chatStore.navigateBranch(activeSession.value.id, messageId, direction);
+  }
 }
 
 function updateModel(event: Event) {
@@ -394,10 +180,10 @@ function updateModel(event: Event) {
 
 function getBranchInfo(message: Message) {
   if (!activeSession.value) return { index: 0, count: 0 };
-  
+
   const session = activeSession.value;
   let siblings: string[] = [];
-  
+
   if (message.parentId) {
     const parent = session.messages.find(m => m.id === message.parentId);
     if (parent && parent.childrenIds) {
@@ -408,9 +194,9 @@ function getBranchInfo(message: Message) {
       .filter(m => !m.parentId)
       .map(m => m.id!);
   }
-  
+
   if (siblings.length <= 1) return { index: 0, count: 0 };
-  
+
   const index = siblings.indexOf(message.id!) + 1;
   return { index, count: siblings.length };
 }
@@ -443,194 +229,129 @@ watch(() => activeSession.value?.id, () => {
 <template>
   <div class="flex h-full relative">
     <!-- Mobile Overlay -->
-    <div 
-      v-if="isSidebarOpen" 
-      class="md:hidden absolute inset-0 z-20 bg-black/50"
-      @click="isSidebarOpen = false"
-    ></div>
+    <div v-if="isSidebarOpen" class="md:hidden absolute inset-0 z-20 bg-black/50" @click="isSidebarOpen = false"></div>
 
     <!-- Sidebar -->
-    <div 
-      class="w-64 bg-transparent border-r border-gray-200 dark:border-gray-700 flex flex-col
+    <div class="w-64 bg-transparent border-r border-gray-200 dark:border-gray-700 flex flex-col
              absolute md:relative z-30 h-full transition-transform duration-300 ease-in-out"
-      :class="isSidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'"
-    >
+      :class="isSidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'">
       <SidebarNavigation @session-selected="isSidebarOpen = false" />
     </div>
 
     <!-- Main Chat Area -->
     <div class="flex-1 flex flex-col h-full relative w-full">
       <!-- Header -->
-      <div class="h-14 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between px-4 bg-transparent">
+      <div
+        class="h-14 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between px-4 bg-transparent">
         <div class="flex items-center gap-3">
-          <button 
-            @click="router.push('/projects')"
-            class="md:hidden p-2 -ml-2 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg"
-          >
+          <button @click="router.push('/projects')"
+            class="md:hidden p-2 -ml-2 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg">
             <Icon icon="lucide:menu" class="w-5 h-5" />
           </button>
           <h2 class="font-bold truncate max-w-[150px] sm:max-w-none">{{ activeSession?.title || 'Select a chat' }}</h2>
         </div>
-        
+
         <div v-if="activeSession" class="flex items-center gap-2">
-          <button 
-            @click="isTreeViewOpen = !isTreeViewOpen"
+          <button @click="isTreeViewOpen = !isTreeViewOpen"
             class="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg flex items-center gap-2"
-            :class="{ 'bg-gray-100 dark:bg-gray-800 text-blue-600': isTreeViewOpen }"
-            title="Toggle Tree View"
-          >
-            <Icon icon="lucide:git-branch" class="w-5 h-5" /> 
+            :class="{ 'bg-gray-100 dark:bg-gray-800 text-blue-600': isTreeViewOpen }" title="Toggle Tree View">
+            <Icon icon="lucide:git-branch" class="w-5 h-5" />
           </button>
-          <button 
-            @click="isArtifactsOpen = !isArtifactsOpen"
+          <button @click="isArtifactsOpen = !isArtifactsOpen"
             class="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg flex items-center gap-2"
-            :class="{ 'bg-gray-100 dark:bg-gray-800 text-blue-600': isArtifactsOpen }"
-            title="Toggle Artifacts"
-          >
-            <Icon icon="lucide:box" class="w-5 h-5" /> 
+            :class="{ 'bg-gray-100 dark:bg-gray-800 text-blue-600': isArtifactsOpen }" title="Toggle Artifacts">
+            <Icon icon="lucide:box" class="w-5 h-5" />
           </button>
-          <button 
-            @click="isFlyoutOpen = !isFlyoutOpen"
+          <button @click="isFlyoutOpen = !isFlyoutOpen"
             class="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg flex items-center gap-2"
-            title="Chat Settings"
-          >
-            <Icon icon="lucide:sliders-horizontal" class="w-5 h-5" /> 
+            title="Chat Settings">
+            <Icon icon="lucide:sliders-horizontal" class="w-5 h-5" />
           </button>
         </div>
       </div>
 
       <!-- Tree View Overlay -->
-      <div v-if="isTreeViewOpen && activeSession" class="flex-1 relative overflow-hidden bg-gray-50 dark:bg-gray-900 z-10">
-        <ConversationTree 
-          :session="activeSession" 
-          @select-message="handleTreeSelection"
-        />
+      <div v-if="isTreeViewOpen && activeSession"
+        class="flex-1 relative overflow-hidden bg-gray-50 dark:bg-gray-900 z-10">
+        <ConversationTree :session="activeSession" @select-message="handleTreeSelection" />
       </div>
 
       <!-- Messages -->
-      <div 
-        v-else
-        ref="messagesContainer"
-        class="flex-1 overflow-y-auto p-4 space-y-4"
-      >
+      <div v-else ref="messagesContainer" class="flex-1 overflow-y-auto p-4 space-y-4">
         <div v-if="!activeSession" class="h-full flex items-center justify-center text-gray-500">
           Select or create a chat to start messaging.
         </div>
         <template v-else>
-          <MessageBubble 
-            v-for="(msg, index) in activeThread" 
-            :key="msg.id || index" 
-            :message="msg" 
-            :branch-index="getBranchInfo(msg).index"
-            :branch-count="getBranchInfo(msg).count"
-            @delete="handleDeleteMessage(msg.id!)"
-            @edit="handleEditMessage(msg.id!, $event)"
-            @regenerate="handleRegenerate(msg.id!)"
-            @navigate="handleNavigateBranch(msg.id!, $event)"
-          />
+          <MessageBubble v-for="(msg, index) in activeThread" :key="msg.id || index" :message="msg"
+            :branch-index="getBranchInfo(msg).index" :branch-count="getBranchInfo(msg).count"
+            @delete="handleDeleteMessage(msg.id!)" @edit="handleEditMessage(msg.id!, $event)"
+            @regenerate="handleRegenerate(msg.id!)" @navigate="handleNavigateBranch(msg.id!, $event)" />
         </template>
       </div>
 
       <!-- Input Area -->
       <div v-if="activeSession" class="p-4 border-t border-gray-200 dark:border-gray-700 bg-transparent">
-        <div 
+        <div
           class="max-w-4xl mx-auto relative rounded-xl border border-gray-300 dark:border-gray-600 bg-gray-50/80 dark:bg-gray-800/60 backdrop-blur-sm transition-colors focus-within:border-blue-500 focus-within:ring-1 focus-within:ring-blue-500"
           :class="{ 'bg-blue-50 dark:bg-blue-900/20 ring-2 ring-blue-500': isDragging }"
-          @dragover.prevent="handleDragOver"
-          @dragleave.prevent="handleDragLeave"
-          @drop.prevent="handleDrop"
-        >
+          @dragover.prevent="handleDragOver" @dragleave.prevent="handleDragLeave" @drop.prevent="handleDrop">
           <!-- Attachments Preview -->
-          <div v-if="selectedAttachments.length > 0" class="p-2 flex gap-2 overflow-x-auto border-b border-gray-200 dark:border-gray-700">
-            <div 
-              v-for="(file, index) in selectedAttachments" 
-              :key="index"
-              class="relative group shrink-0 bg-gray-100 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-2 w-24 h-24 flex flex-col items-center justify-center"
-            >
-              <button 
-                @click="removeAttachment(index)"
-                class="absolute -top-2 -right-2 bg-red-500 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs opacity-0 group-hover:opacity-100 transition-opacity"
-              >
+          <div v-if="selectedAttachments.length > 0"
+            class="p-2 flex gap-2 overflow-x-auto border-b border-gray-200 dark:border-gray-700">
+            <div v-for="(file, index) in selectedAttachments" :key="index"
+              class="relative group shrink-0 bg-gray-100 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-2 w-24 h-24 flex flex-col items-center justify-center">
+              <button @click="removeAttachment(index)"
+                class="absolute -top-2 -right-2 bg-red-500 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs opacity-0 group-hover:opacity-100 transition-opacity">
                 ✕
               </button>
-              <img 
-                v-if="file.type.startsWith('image/')" 
-                :src="file.content" 
-                class="w-full h-full object-cover rounded"
-              />
+              <img v-if="file.type.startsWith('image/')" :src="file.content"
+                class="w-full h-full object-cover rounded" />
               <div v-else class="text-3xl">📄</div>
               <div class="text-xs truncate w-full text-center mt-1">{{ file.name }}</div>
             </div>
           </div>
 
-          <textarea 
-            v-model="userInput"
-            @keydown.enter.exact.prevent="handleSend"
-            @paste="handlePaste"
-            placeholder="Type a message..."
-            class="w-full p-3 bg-transparent outline-none resize-none max-h-64"
-            rows="3"
-          ></textarea>
-          
+          <textarea v-model="userInput" @keydown.enter.exact.prevent="handleSend" @paste="handlePaste"
+            placeholder="Type a message..." class="w-full p-3 bg-transparent outline-none resize-none max-h-64"
+            rows="3"></textarea>
+
           <!-- Toolbar -->
           <div class="flex justify-between items-center p-2 pl-3">
             <div class="flex items-center gap-2">
-                <!-- File Input Button -->
-                <button 
-                  @click="triggerFileInput"
-                  class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 disabled:opacity-30 disabled:cursor-not-allowed p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
-                  :title="isVisionSupported ? 'Attach files' : 'Model does not support vision'"
-                  :disabled="!isVisionSupported"
-                >
-                  <Icon icon="lucide:paperclip" class="w-5 h-5" />
-                </button>
-                <input 
-                  ref="fileInput"
-                  type="file"
-                  multiple
-                  class="hidden"
-                  @change="handleFileSelect"
-                />
+              <!-- File Input Button -->
+              <button @click="triggerFileInput"
+                class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 disabled:opacity-30 disabled:cursor-not-allowed p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
+                :title="isVisionSupported ? 'Attach files' : 'Model does not support vision'"
+                :disabled="!isVisionSupported">
+                <Icon icon="lucide:paperclip" class="w-5 h-5" />
+              </button>
+              <input ref="fileInput" type="file" multiple class="hidden" @change="handleFileSelect" />
 
-                <!-- Tools Selector -->
-                <ToolsSelector 
-                  v-if="activeSession"
-                  :session-id="activeSession.id"
-                />
+              <!-- Tools Selector -->
+              <ToolsSelector v-if="activeSession" :session-id="activeSession.id" />
 
-                <!-- Model Selector -->
-                <div class="relative group">
-                    <select 
-                        :value="activeSession.modelId"
-                        @change="updateModel"
-                        class="appearance-none pl-2 pr-8 py-1 rounded-lg text-xs font-medium bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 cursor-pointer focus:outline-none focus:ring-2 focus:ring-blue-500 max-w-[150px] truncate"
-                        title="Select Model"
-                    >
-                        <option v-for="model in models" :key="model.id" :value="model.id">
-                        {{ model.name }}
-                        </option>
-                    </select>
-                    <div class="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-gray-500">
-                        <Icon icon="lucide:chevron-down" class="w-3 h-3" />
-                    </div>
+              <!-- Model Selector -->
+              <div class="relative group">
+                <select :value="activeSession.modelId" @change="updateModel"
+                  class="appearance-none pl-2 pr-8 py-1 rounded-lg text-xs font-medium bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 cursor-pointer focus:outline-none focus:ring-2 focus:ring-blue-500 max-w-[150px] truncate"
+                  title="Select Model">
+                  <option v-for="model in models" :key="model.id" :value="model.id">
+                    {{ model.name }}
+                  </option>
+                </select>
+                <div class="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-gray-500">
+                  <Icon icon="lucide:chevron-down" class="w-3 h-3" />
                 </div>
+              </div>
             </div>
 
             <!-- Send Button -->
-            <button 
-              v-if="isGenerating"
-              @click="stopGeneration"
-              class="p-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors"
-              title="Stop generating"
-            >
+            <button v-if="isGenerating" @click="stopGeneration"
+              class="p-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors" title="Stop generating">
               <Icon icon="lucide:square" class="w-4 h-4 fill-current" />
             </button>
-            <button 
-              v-else
-              @click="handleSend"
-              :disabled="(!userInput.trim() && selectedAttachments.length === 0)"
-              class="p-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-            >
+            <button v-else @click="handleSend" :disabled="(!userInput.trim() && selectedAttachments.length === 0)"
+              class="p-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors">
               <Icon icon="lucide:send" class="w-4 h-4" />
             </button>
           </div>
@@ -639,21 +360,12 @@ watch(() => activeSession.value?.id, () => {
     </div>
 
     <!-- Artifacts Panel (Desktop: Side, Mobile: Overlay) -->
-    <div 
-      v-if="activeSession && isArtifactsOpen"
-      class="fixed inset-0 z-40 md:static md:z-0 md:w-1/2 lg:w-2/5 border-l border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 transition-all duration-300 ease-in-out shadow-xl md:shadow-none"
-    >
-      <ArtifactsPanel 
-        :session="activeSession" 
-        :is-open="isArtifactsOpen"
-        @close="isArtifactsOpen = false"
-      />
+    <div v-if="activeSession && isArtifactsOpen"
+      class="fixed inset-0 z-40 md:static md:z-0 md:w-1/2 lg:w-2/5 border-l border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 transition-all duration-300 ease-in-out shadow-xl md:shadow-none">
+      <ArtifactsPanel :session="activeSession" :is-open="isArtifactsOpen" @close="isArtifactsOpen = false" />
     </div>
 
     <!-- Flyout -->
-    <ChatSettingsFlyout 
-      :is-open="isFlyoutOpen" 
-      @close="isFlyoutOpen = false" 
-    />
+    <ChatSettingsFlyout :is-open="isFlyoutOpen" @close="isFlyoutOpen = false" />
   </div>
 </template>

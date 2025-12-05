@@ -2,6 +2,9 @@ import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
 import { Store } from '@tauri-apps/plugin-store';
 
+import { useSettingsStore } from './settings';
+import { sendMessage } from '../services/llm';
+
 export interface Attachment {
   name: string;
   type: string;
@@ -10,7 +13,8 @@ export interface Attachment {
 
 export interface Artifact {
   id: string;
-  type: string; // e.g. 'text/html', 'application/javascript', 'text/markdown'
+  path: string;
+  type: string;
   title: string;
   content: string;
   createdAt: number;
@@ -234,6 +238,18 @@ export const useChatStore = defineStore('chat', () => {
         }
       });
       sessions.value = savedSessions;
+
+      // Migration: Artifacts path
+      sessions.value.forEach(s => {
+        if (s.artifacts) {
+          s.artifacts.forEach(a => {
+            if (!a.path) {
+              // Default to using title as path if it looks like a file, otherwise id
+              a.path = a.title || a.id;
+            }
+          });
+        }
+      });
     }
 
     const savedProjects = await s.get<Project[]>('projects');
@@ -352,6 +368,44 @@ export const useChatStore = defineStore('chat', () => {
       }
       save();
     }
+  }
+
+  function deleteSessionsInProject(projectId: string) {
+    const sessionsToDelete = sessions.value.filter(s => s.projectId === projectId);
+
+    // Add to deleted sessions for history/undo support if we wanted, or just tombstone them
+    sessionsToDelete.forEach(s => {
+      if (!s.isTransient) {
+        deletedSessions.value.push({ id: s.id, deletedAt: Date.now() });
+      }
+    });
+
+    // Remove from sessions
+    sessions.value = sessions.value.filter(s => s.projectId !== projectId);
+
+    // If active session was in this project, clear it
+    if (activeSessionId.value) {
+      const activeWasInProject = sessionsToDelete.some(s => s.id === activeSessionId.value);
+      if (activeWasInProject) {
+        activeSessionId.value = null;
+      }
+    }
+
+    save();
+  }
+
+  function deleteAllSessions() {
+    // Tombstone all non-transient sessions
+    sessions.value.forEach(s => {
+      if (!s.isTransient) {
+        deletedSessions.value.push({ id: s.id, deletedAt: Date.now() });
+      }
+    });
+
+    sessions.value = [];
+    activeSessionId.value = null;
+
+    save();
   }
 
   function addMessage(sessionId: string, message: Message, parentId?: string) {
@@ -611,6 +665,312 @@ export const useChatStore = defineStore('chat', () => {
     return thread;
   });
 
+  function getArtifactsForSession(sessionId: string) {
+    const session = sessions.value.find(s => s.id === sessionId);
+    if (!session) return [];
+
+    if (session.projectId) {
+      // Return all artifacts from all sessions in this project
+      const projectSessions = sessions.value.filter(s => s.projectId === session.projectId);
+      return projectSessions.flatMap(s => s.artifacts || []).sort((a, b) => b.updatedAt - a.updatedAt);
+    } else {
+      // Return only this session's artifacts
+      return (session.artifacts || []).sort((a, b) => b.updatedAt - a.updatedAt);
+    }
+  }
+
+  // --- Request Handling ---
+
+  const abortController = ref<AbortController | null>(null);
+
+  function stopGeneration() {
+    if (abortController.value) {
+      abortController.value.abort();
+      abortController.value = null;
+    }
+    isGenerating.value = false;
+  }
+
+  async function generateTitle(sessionId: string, userContent: string, assistantContent: string) {
+    // We need to access settings store. 
+    // Note: Pinia allows using other stores inside actions.
+    const settingsStore = useSettingsStore(); // Need to import this or pass it? 
+    // We can import it at top level, but to avoid circular deps if any, internal usage is safe?
+    // Actually, we can just use `useSettingsStore()` here since `pinia` instance is active.
+
+    const session = sessions.value.find(s => s.id === sessionId);
+    if (!session) return;
+
+    const { models, endpoints } = settingsStore;
+
+    // We need to resolve references since they are refs in the store?
+    // Actually settingsStore properties are state/getters, so unwrap if needed?
+    // `useSettingsStore` returns a reactive object. `models` is a state array.
+
+    const model = models.find(m => m.id === session.modelId);
+    if (!model) return;
+
+    const endpoint = endpoints.find(e => e.id === model.endpointId);
+    if (!endpoint) return;
+
+    const titlePrompt = `Generate a short, concise title (max 5-6 words) for a chat that starts with this exchange. Do not use quotes.
+User: ${userContent.substring(0, 500)}
+Assistant: ${assistantContent.substring(0, 500)}
+Title:`;
+
+    const messages: Message[] = [
+      { role: 'user', content: titlePrompt, timestamp: Date.now() }
+    ];
+
+    let title = '';
+
+    // Import sendMessage dynamically or at top? Top is better.
+    // Assuming we added import { sendMessage } from '../services/llm';
+
+    try {
+      await sendMessage(endpoint, model, messages, { temperature: 0.7 }, (payload) => {
+        if (payload.content) title += payload.content;
+      }, sessionId);
+
+      if (title.trim()) {
+        updateSessionSettings(sessionId, { title: title.trim().replace(/^["']|["']$/g, '') });
+      }
+    } catch (e) {
+      console.error('Failed to generate title', e);
+    }
+  }
+
+  async function generateResponse(sessionId: string, onChunk?: () => void) {
+    const session = sessions.value.find(s => s.id === sessionId);
+    if (!session) return;
+
+    const settingsStore = useSettingsStore();
+    const { models, endpoints, systemPrompts } = settingsStore;
+
+    const model = models.find(m => m.id === session.modelId);
+    if (!model) {
+      isGenerating.value = false;
+      return;
+    }
+    const endpoint = endpoints.find(e => e.id === model.endpointId);
+    if (!endpoint) {
+      isGenerating.value = false;
+      return;
+    }
+
+    isGenerating.value = true;
+    abortController.value = new AbortController();
+    const startTime = Date.now();
+
+    // Get active thread
+    // We need to reconstruct the thread based on currentLeafId
+    const thread: Message[] = [];
+    let currentId = session.currentLeafId;
+    while (currentId) {
+      const msg = session.messages.find(m => m.id === currentId);
+      if (msg) {
+        thread.unshift(msg);
+        currentId = msg.parentId || null;
+      } else {
+        break;
+      }
+    }
+
+    const initialAssistantMsg: Message = {
+      role: 'assistant',
+      content: '',
+      timestamp: startTime,
+      model: model.name,
+      parts: []
+    };
+
+    // Add message
+    const assistantMsg = addMessage(sessionId, initialAssistantMsg);
+    if (!assistantMsg) {
+      isGenerating.value = false;
+      return;
+    }
+
+    // Find system prompt
+    let systemPromptContent = '';
+    if (session.systemPromptId) {
+      const prompt = systemPrompts.find(p => p.id === session.systemPromptId);
+      if (prompt) systemPromptContent = prompt.content;
+    }
+
+
+    // sendMessage expects Message[] but handles 'system' role manually inside?
+    // Actually sendMessage implementation takes Message[] and constructs apiMessages.
+    // We should pass the thread.
+
+    if (systemPromptContent) {
+      // We can prepend system prompt, but sendMessage logic might want to handle it?
+      // Looking at original ChatView code:
+      // apiMessages.push({ role: 'system', ... });
+      // apiMessages.push(...activeThread.value.slice(0, -1));
+      // Wait, slice(0, -1) assumes the LAST message is the empty assistant message we just added?
+      // Yes, addMessage appends to messages. `thread` includes it.
+    }
+
+    // Construct messages for API
+    const messagesForApi: Message[] = [];
+    if (systemPromptContent) {
+      messagesForApi.push({ role: 'system', content: systemPromptContent, timestamp: 0 } as Message);
+    }
+    // Add all messages from the thread
+    messagesForApi.push(...thread);
+
+    let userContentForTitle = '';
+    // Find last user message for title generation
+    const lastUserMsg = [...messagesForApi].reverse().find(m => m.role === 'user');
+    if (lastUserMsg) userContentForTitle = lastUserMsg.content;
+    const checkTitleGeneration = messagesForApi.filter(m => m.role !== 'system').length === 1; // Only one user message
+
+    try {
+      await sendMessage(
+        endpoint,
+        model,
+        messagesForApi,
+        {
+          temperature: session.temperature ?? model.temperature ?? 0.7,
+        },
+        (payload) => {
+          if (!assistantMsg.parts) assistantMsg.parts = [];
+          const parts = assistantMsg.parts;
+          const lastPart = parts[parts.length - 1];
+
+          if (payload.reasoning) {
+            if (lastPart && lastPart.type === 'reasoning') {
+              lastPart.content = (lastPart.content || '') + payload.reasoning;
+            } else {
+              parts.push({
+                id: crypto.randomUUID(),
+                type: 'reasoning',
+                content: payload.reasoning
+              });
+            }
+            assistantMsg.reasoning = (assistantMsg.reasoning || '') + payload.reasoning;
+          }
+          if (payload.content) {
+            if (lastPart && lastPart.type === 'text') {
+              lastPart.content = (lastPart.content || '') + payload.content;
+            } else {
+              parts.push({
+                id: crypto.randomUUID(),
+                type: 'text',
+                content: payload.content
+              });
+            }
+            assistantMsg.content += payload.content;
+          }
+          if (payload.toolCalls) {
+            for (const tc of payload.toolCalls) {
+              parts.push({
+                id: crypto.randomUUID(),
+                type: 'tool-call',
+                toolCall: tc
+              });
+            }
+            assistantMsg.toolCalls = [...(assistantMsg.toolCalls || []), ...payload.toolCalls];
+          }
+          if (payload.toolResults) {
+            for (const tr of payload.toolResults) {
+              parts.push({
+                id: crypto.randomUUID(),
+                type: 'tool-result',
+                toolResult: tr
+              });
+            }
+            assistantMsg.toolResults = [...(assistantMsg.toolResults || []), ...payload.toolResults];
+          }
+
+          if (onChunk) onChunk();
+        },
+        session.id,
+        session.enabledMcpTools,
+        abortController.value?.signal
+      );
+    } catch (e) {
+      assistantMsg.content += `\n\nError: ${e}`;
+      if (assistantMsg.parts) {
+        assistantMsg.parts.push({
+          id: crypto.randomUUID(),
+          type: 'text',
+          content: `\n\nError: ${e}`
+        });
+      }
+    } finally {
+      abortController.value = null;
+      const endTime = Date.now();
+      const duration = endTime - startTime;
+      assistantMsg.generationTime = duration;
+
+      let totalChars = assistantMsg.content.length;
+      if (assistantMsg.reasoning) {
+        totalChars += assistantMsg.reasoning.length;
+      }
+      if (assistantMsg.toolCalls) {
+        for (const toolCall of assistantMsg.toolCalls) {
+          totalChars += toolCall.name.length;
+          if (toolCall.arguments) {
+            totalChars += JSON.stringify(toolCall.arguments).length;
+          }
+        }
+      }
+
+      const estimatedTokens = totalChars / 4;
+      if (duration > 0) {
+        assistantMsg.tokensPerSecond = estimatedTokens / (duration / 1000);
+      }
+
+      updateSessionSettings(sessionId, {});
+
+      isGenerating.value = false;
+      save();
+
+      if (checkTitleGeneration && assistantMsg.content && !assistantMsg.content.startsWith('Error:')) {
+        // Run title generation in background
+        generateTitle(sessionId, userContentForTitle, assistantMsg.content);
+      }
+    }
+  }
+
+  async function sendUserMessage(sessionId: string, content: string, attachments: Attachment[] = [], onChunk?: () => void) {
+    if (isGenerating.value) return;
+
+    const userMsg: Message = {
+      role: 'user',
+      content,
+      timestamp: Date.now(),
+      attachments
+    };
+
+    addMessage(sessionId, userMsg);
+    await generateResponse(sessionId, onChunk);
+  }
+
+  async function regenerateMessage(sessionId: string, messageId: string, onChunk?: () => void) {
+    if (isGenerating.value) return;
+
+    const session = sessions.value.find(s => s.id === sessionId);
+    if (!session) return;
+
+    const message = session.messages.find(m => m.id === messageId);
+    if (!message) return;
+
+    if (message.role === 'user') {
+      session.currentLeafId = messageId;
+      save();
+      await generateResponse(sessionId, onChunk);
+
+    } else if (message.role === 'assistant') {
+      const parentId = message.parentId;
+      session.currentLeafId = parentId || null;
+      save();
+      await generateResponse(sessionId, onChunk);
+    }
+  }
+
   return {
     sessions,
     projects,
@@ -618,7 +978,7 @@ export const useChatStore = defineStore('chat', () => {
     deletedProjects,
     activeSessionId,
     activeSession,
-    activeThread, // Export this
+    activeThread,
     isGenerating,
     load,
     save,
@@ -636,25 +996,73 @@ export const useChatStore = defineStore('chat', () => {
     setCurrentLeaf,
     createArtifact,
     updateArtifact,
-    setActiveSession
+    setActiveSession,
+    getArtifactsForSession,
+    // Actions
+    sendUserMessage,
+    regenerateMessage,
+    stopGeneration,
+    deleteSessionsInProject,
+    deleteAllSessions
   };
 });
 
-function createArtifact(sessionId: string, artifact: Artifact, skipSave: boolean = false) {
+function createArtifact(sessionId: string, artifact: Partial<Artifact> & { type: string; content: string; title: string }, skipSave: boolean = false) {
   const store = useChatStore();
   const session = store.sessions.find(s => s.id === sessionId);
   if (session) {
     if (!session.artifacts) session.artifacts = [];
 
-    const existing = session.artifacts.find(a => a.id === artifact.id);
+    // Resolve path and ID
+    // If path is provided, use it. If not, derive from title.
+    const path = artifact.path || artifact.title;
+
+    // Check if artifact with this path already exists
+    const existing = session.artifacts.find(a => a.path === path || a.id === artifact.id);
+
     if (existing) {
-      // Upsert: update fields that are present
-      if (artifact.title) existing.title = artifact.title;
-      if (artifact.type) existing.type = artifact.type;
-      if (artifact.content) existing.content = artifact.content;
-      existing.updatedAt = Date.now();
+      // Upsert
+      Object.assign(existing, {
+        ...artifact,
+        path, // Ensure path is set
+        updatedAt: Date.now()
+      });
     } else {
-      session.artifacts.push(artifact);
+      // Check in project
+      let targetArtifact = null;
+
+      if (session.projectId) {
+        const projectSessions = store.sessions.filter(s => s.projectId === session.projectId);
+        for (const s of projectSessions) {
+          if (s.artifacts) {
+            const found = s.artifacts.find(a => a.path === path || (artifact.id && a.id === artifact.id));
+            if (found) {
+              targetArtifact = found;
+              break;
+            }
+          }
+        }
+      }
+
+      if (targetArtifact) {
+        Object.assign(targetArtifact, {
+          ...artifact,
+          path,
+          updatedAt: Date.now()
+        });
+      } else {
+        // Create new
+        const newArtifact: Artifact = {
+          id: artifact.id || crypto.randomUUID(),
+          path: path,
+          type: artifact.type,
+          title: artifact.title,
+          content: artifact.content,
+          createdAt: artifact.createdAt || Date.now(),
+          updatedAt: Date.now()
+        };
+        session.artifacts.push(newArtifact);
+      }
     }
     session.updatedAt = Date.now();
     if (!skipSave) {
@@ -663,14 +1071,35 @@ function createArtifact(sessionId: string, artifact: Artifact, skipSave: boolean
   }
 }
 
-function updateArtifact(sessionId: string, artifactId: string, content: string, skipSave: boolean = false) {
+function updateArtifact(sessionId: string, identifier: string, content: string, skipSave: boolean = false) {
   const store = useChatStore();
   const session = store.sessions.find(s => s.id === sessionId);
-  if (session && session.artifacts) {
-    const artifact = session.artifacts.find(a => a.id === artifactId);
-    if (artifact) {
-      artifact.content = content;
-      artifact.updatedAt = Date.now();
+
+  if (session) {
+    let targetArtifact: Artifact | undefined;
+
+    // Helper finder
+    const find = (artifacts: Artifact[]) => artifacts.find(a => a.id === identifier || a.path === identifier);
+
+    // Check current session first
+    if (session.artifacts) {
+      targetArtifact = find(session.artifacts);
+    }
+
+    // If not found and in project, check other sessions
+    if (!targetArtifact && session.projectId) {
+      const projectSessions = store.sessions.filter(s => s.projectId === session.projectId);
+      for (const s of projectSessions) {
+        if (s.artifacts) {
+          targetArtifact = find(s.artifacts);
+          if (targetArtifact) break;
+        }
+      }
+    }
+
+    if (targetArtifact) {
+      targetArtifact.content = content;
+      targetArtifact.updatedAt = Date.now();
       session.updatedAt = Date.now();
       if (!skipSave) {
         store.save();

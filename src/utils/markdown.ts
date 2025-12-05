@@ -13,15 +13,20 @@ const md = new MarkdownIt({
 });
 
 md.options.highlight = function (str, lang) {
-  if (lang && hljs.getLanguage(lang)) {
-    try {
-      return '<pre><code class="hljs">' +
-        hljs.highlight(str, { language: lang, ignoreIllegals: true }).value +
-        '</code></pre>';
-    } catch (__) { }
-  }
+  const code = (lang && hljs.getLanguage(lang))
+    ? hljs.highlight(str, { language: lang, ignoreIllegals: true }).value
+    : md.utils.escapeHtml(str);
 
-  return '<pre><code class="hljs">' + md.utils.escapeHtml(str) + '</code></pre>';
+  return `<div class="relative group my-4 rounded-lg overflow-hidden bg-gray-900 border border-gray-700">
+    <div class="flex justify-between items-center bg-gray-800 px-4 py-1.5 border-b border-gray-700 text-xs text-gray-400 select-none">
+      <span class="font-mono">${lang || 'text'}</span>
+      <button class="copy-code-btn flex items-center gap-1.5 hover:text-white transition-colors" title="Copy code">
+        <span class="text-lg">📋</span>
+        <span>Copy</span>
+      </button>
+    </div>
+    <pre class="!m-0 !p-4 !bg-transparent overflow-x-auto"><code class="hljs ${lang ? 'language-' + lang : ''}">${code}</code></pre>
+  </div>`;
 };
 
 // Define custom rule to allow spaces in inline math

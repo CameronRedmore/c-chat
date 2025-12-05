@@ -259,12 +259,50 @@ export async function sendMessage(
       body.tool_choice = 'auto';
     }
 
-    const response = await fetch(`${endpoint.url}/chat/completions`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(body),
-      signal
-    });
+    let response;
+    let retryCount = 0;
+    const MAX_RETRIES = 5;
+    const BASE_DELAY = 1000;
+
+    while (true) {
+      try {
+        response = await fetch(`${endpoint.url}/chat/completions`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(body),
+          signal
+        });
+
+        if (response.status === 429) {
+          if (retryCount < MAX_RETRIES) {
+            const delay = BASE_DELAY * Math.pow(2, retryCount);
+            console.warn(`Rate limited (429). Retrying in ${delay}ms... (Attempt ${retryCount + 1}/${MAX_RETRIES})`);
+
+            // Wait for delay, but respect abort signal
+            await new Promise((resolve, reject) => {
+              if (signal?.aborted) return reject(new Error('Aborted'));
+              const timer = setTimeout(resolve, delay);
+              signal?.addEventListener('abort', () => {
+                clearTimeout(timer);
+                reject(new Error('Aborted'));
+              }, { once: true });
+            });
+
+            retryCount++;
+            continue;
+          } else {
+            console.error('Rate limit retry exhausted.');
+          }
+        }
+
+        break;
+      } catch (e: any) {
+        // If it's an abort error, rethrow immediately
+        if (e.message === 'Aborted' || e.name === 'AbortError') throw e;
+        // For other errors (network?), we currently don't retry, just throw
+        throw e;
+      }
+    }
 
     if (!response.ok) {
       const error = await response.text();

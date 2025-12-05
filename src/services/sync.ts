@@ -137,13 +137,11 @@ export class SyncService {
 
         this.syncStore.setSyncing(true);
         try {
-            console.log('Starting sync...');
             await this.syncSettings();
             await this.syncChats();
             await this.syncProjects();
             this.settingsStore.setLastSyncTime(Date.now());
             this.syncStore.setSuccess();
-            console.log('Sync completed.');
         } catch (error) {
             console.error('Sync failed:', error);
             this.syncStore.setError(String(error));
@@ -159,7 +157,6 @@ export class SyncService {
             const remoteUpdatedAt = new Date(remoteMeta.updated_at).getTime();
             if (remoteUpdatedAt > localUpdatedAt) {
                 // Download
-                console.log('Downloading settings...');
                 const remoteSettings = await this.getValue<Partial<SettingsState>>(key);
                 if (remoteSettings) {
                     // Apply updates carefully to avoid overwriting sync token itself if not needed, 
@@ -190,7 +187,6 @@ export class SyncService {
                 }
             } else if (localUpdatedAt > remoteUpdatedAt) {
                 // Upload
-                console.log('Uploading settings...');
                 const state: Partial<SettingsState> = {
                     endpoints: this.settingsStore.endpoints,
                     models: this.settingsStore.models,
@@ -202,7 +198,6 @@ export class SyncService {
             }
         } else {
             // No remote settings, upload local
-            console.log('Uploading initial settings...');
             const state: Partial<SettingsState> = {
                 endpoints: this.settingsStore.endpoints,
                 models: this.settingsStore.models,
@@ -233,7 +228,6 @@ export class SyncService {
             const remoteUpdatedAt = new Date(meta.updated_at).getTime();
 
             if (remoteUpdatedAt > localUpdatedAt) {
-                console.log(`Downloading chat ${chatId}...`);
                 const remoteData = await this.getValue<any>(meta.key);
                 if (remoteData) {
                     if (remoteData.deleted) {
@@ -263,10 +257,15 @@ export class SyncService {
                         // Remote says active
                         const remoteSession = remoteData as ChatSession;
                         if (localSession) {
-                            this.chatStore.updateSessionSettings(chatId, remoteSession);
-                            const index = this.chatStore.sessions.findIndex(s => s.id === chatId);
-                            if (index !== -1) {
-                                this.chatStore.sessions[index] = remoteSession;
+                            // Only update if remote content is actually newer than local content
+                            // This prevents loops where server metadata time > content time
+                            if (remoteSession.updatedAt > localSession.updatedAt) {
+                                this.chatStore.updateSessionSettings(chatId, remoteSession);
+                                const index = this.chatStore.sessions.findIndex(s => s.id === chatId);
+                                if (index !== -1) {
+                                    this.chatStore.sessions[index] = remoteSession;
+                                }
+                                this.chatStore.save();
                             }
                         } else {
                             // Undelete if needed
@@ -275,8 +274,8 @@ export class SyncService {
                                 this.chatStore.deletedSessions.splice(delIndex, 1);
                             }
                             this.chatStore.sessions.unshift(remoteSession);
+                            this.chatStore.save();
                         }
-                        this.chatStore.save();
                     }
                 }
             }
@@ -290,7 +289,6 @@ export class SyncService {
             const localUpdatedAt = session.updatedAt;
 
             if (!meta || localUpdatedAt > new Date(meta.updated_at).getTime()) {
-                console.log(`Uploading chat ${session.id}...`);
                 await this.setValue(key, session);
             }
         }
@@ -302,7 +300,6 @@ export class SyncService {
             const localUpdatedAt = tombstone.deletedAt;
 
             if (!meta || localUpdatedAt > new Date(meta.updated_at).getTime()) {
-                console.log(`Uploading tombstone for chat ${tombstone.id}...`);
                 await this.setValue(key, {
                     id: tombstone.id,
                     deleted: true,
@@ -329,7 +326,6 @@ export class SyncService {
             const remoteUpdatedAt = new Date(meta.updated_at).getTime();
 
             if (remoteUpdatedAt > localUpdatedAt) {
-                console.log(`Downloading project ${projectId}...`);
                 const remoteData = await this.getValue<any>(meta.key);
                 if (remoteData) {
                     if (remoteData.deleted) {
@@ -353,7 +349,11 @@ export class SyncService {
                         // Remote says active
                         const remoteProject = remoteData as Project;
                         if (localProject) {
-                            Object.assign(localProject, remoteProject);
+                            // Only update if remote content is actually newer
+                            if (remoteProject.updatedAt > localProject.updatedAt) {
+                                Object.assign(localProject, remoteProject);
+                                this.chatStore.save();
+                            }
                         } else {
                             // Undelete
                             const delIndex = this.chatStore.deletedProjects.findIndex(p => p.id === projectId);
@@ -361,8 +361,8 @@ export class SyncService {
                                 this.chatStore.deletedProjects.splice(delIndex, 1);
                             }
                             this.chatStore.projects.push(remoteProject);
+                            this.chatStore.save();
                         }
-                        this.chatStore.save();
                     }
                 }
             }
@@ -375,7 +375,6 @@ export class SyncService {
             const localUpdatedAt = project.updatedAt;
 
             if (!meta || localUpdatedAt > new Date(meta.updated_at).getTime()) {
-                console.log(`Uploading project ${project.id}...`);
                 await this.setValue(key, project);
             }
         }
@@ -387,7 +386,6 @@ export class SyncService {
             const localUpdatedAt = tombstone.deletedAt;
 
             if (!meta || localUpdatedAt > new Date(meta.updated_at).getTime()) {
-                console.log(`Uploading tombstone for project ${tombstone.id}...`);
                 await this.setValue(key, {
                     id: tombstone.id,
                     deleted: true,
