@@ -75,39 +75,6 @@ export const clientTools = [
                 required: ['path']
             }
         }
-    },
-    // Compatibility aliases
-    {
-        type: 'function',
-        function: {
-            name: 'create_artifact',
-            description: 'Deprecated. Use create_file instead.',
-            parameters: {
-                type: 'object',
-                properties: {
-                    id: { type: 'string' },
-                    type: { type: 'string' },
-                    title: { type: 'string' },
-                    content: { type: 'string' }
-                },
-                required: ['id', 'type', 'title', 'content']
-            }
-        }
-    },
-    {
-        type: 'function',
-        function: {
-            name: 'update_artifact',
-            description: 'Deprecated. Use update_file instead.',
-            parameters: {
-                type: 'object',
-                properties: {
-                    id: { type: 'string' },
-                    content: { type: 'string' }
-                },
-                required: ['id', 'content']
-            }
-        }
     }
 ];
 
@@ -161,40 +128,5 @@ export async function handleClientToolCall(name: string, args: any, sessionId: s
 
         return artifact.content;
     }
-
-    // Legacy handlers
-    if (name === 'create_artifact') {
-        try {
-            chatStore.createArtifact(sessionId, {
-                id: args.id,
-                path: args.id, // Fallback path
-                type: args.type,
-                title: args.title,
-                content: args.content,
-                createdAt: Date.now(),
-                updatedAt: Date.now()
-            });
-            return `Artifact "${args.title}" created successfully.`;
-        } catch (e: any) {
-            return `Error creating artifact: ${e.message}`;
-        }
-    }
-
-    if (name === 'update_artifact') {
-        try {
-            chatStore.updateArtifact(sessionId, args.id, args.content);
-            return `Artifact updated successfully.`;
-        } catch (e: any) {
-            return `Error updating artifact: ${e.message}`;
-        }
-    }
-
-    if (name === 'read_artifact') {
-        const artifacts = chatStore.getArtifactsForSession(sessionId);
-        const artifact = artifacts.find(a => a.id === args.id);
-        if (!artifact) return `Error: Artifact with ID "${args.id}" not found.`;
-        return artifact.content;
-    }
-
     throw new Error(`Unknown client tool: ${name}`);
 }

@@ -92,13 +92,11 @@ export class SyncService {
 
     private startActiveSync() {
         this.clearSyncIntervals();
-        // console.log('Switching to active sync mode');
         this.activeInterval = window.setInterval(() => this.sync(), this.ACTIVE_SYNC_RATE);
     }
 
     private startIdleSync() {
         this.clearSyncIntervals();
-        // console.log('Switching to idle sync mode');
         this.syncInterval = window.setInterval(() => this.sync(), this.IDLE_SYNC_RATE);
     }
 
@@ -159,22 +157,12 @@ export class SyncService {
                 // Download
                 const remoteSettings = await this.getValue<Partial<SettingsState>>(key);
                 if (remoteSettings) {
-                    // Apply updates carefully to avoid overwriting sync token itself if not needed, 
-                    // though usually we want to sync everything.
-                    // We need to avoid triggering watchers that would cause a re-upload.
-                    // Since isSyncing is true, we should be safe if we implement watchers correctly.
-
-                    // We don't want to overwrite the sync token with an old one or empty one if that happens
+                    // Apply updates carefully to avoid overwriting sync token itself if not needed
                     const { syncToken, ...rest } = remoteSettings;
 
                     if (rest.endpoints) this.settingsStore.reorderEndpoints(rest.endpoints);
                     if (rest.models) this.settingsStore.reorderModels(rest.models);
                     if (rest.systemPrompts) {
-                        // We don't have a bulk setter for prompts, so we iterate. 
-                        // Actually, the store doesn't have a bulk setter for everything.
-                        // We might need to extend the store or just update the refs directly if we were inside the store.
-                        // Since we are outside, we have to use available actions or access state if possible.
-                        // Pinia state is reactive.
                         this.settingsStore.endpoints = rest.endpoints || [];
                         this.settingsStore.models = rest.models || [];
                         this.settingsStore.systemPrompts = rest.systemPrompts || [];
@@ -412,12 +400,6 @@ export class SyncService {
     }
 
     private async getKeyMetadata(key: string): Promise<KeyMetadata | null> {
-        // Efficiently check if a key exists and get its metadata by listing with prefix
-        // Or we could just try to get it, but GET downloads content.
-        // The list API returns metadata.
-        // Since we don't have a HEAD endpoint, list is better for checking timestamps without downloading.
-        // However, for a single key, list might be overkill if we have many keys.
-        // But for 'settings', it's fine.
         try {
             const res = await fetch(`${API_BASE}/keys?prefix=${key}&limit=1`, {
                 headers: this.headers

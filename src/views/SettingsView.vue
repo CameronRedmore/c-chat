@@ -506,7 +506,7 @@ async function handleRestore() {
                 <option v-for="ep in endpoints" :key="ep.id" :value="ep.id">{{ ep.name }}</option>
               </select>
             </div>
-            <div class="grid grid-cols-2 gap-4">
+            <div class="grid grid-cols-3 gap-4">
               <div>
                 <label class="block text-sm font-medium mb-1">Context Size</label>
                 <input v-model.number="newModel.contextSize" type="number" class="w-full px-3 py-2 rounded border dark:bg-gray-700 dark:border-gray-600" />
@@ -515,7 +515,10 @@ async function handleRestore() {
                 <label class="block text-sm font-medium mb-1">Default Temp</label>
                 <input v-model.number="newModel.temperature" type="number" step="0.1" min="0" max="2" class="w-full px-3 py-2 rounded border dark:bg-gray-700 dark:border-gray-600" />
               </div>
-
+              <div>
+                <label class="block text-sm font-medium mb-1">Default Top P</label>
+                <input v-model.number="newModel.topP" type="number" step="0.1" min="0" max="1" placeholder="Optional" class="w-full px-3 py-2 rounded border dark:bg-gray-700 dark:border-gray-600" />
+              </div>
             </div>
             <div class="flex gap-4">
               <label class="flex items-center gap-2">

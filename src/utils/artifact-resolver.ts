@@ -24,7 +24,6 @@ export function resolveArtifactLinks(html: string, basePath: string, sessionArti
             baseParts.pop();
         }
 
-        // simple path resolution
         // remove ./
         let cleanRel = relativePath.startsWith('./') ? relativePath.slice(2) : relativePath;
 
@@ -70,9 +69,48 @@ export function resolveArtifactLinks(html: string, basePath: string, sessionArti
     // Process images
     doc.querySelectorAll('img[src]').forEach(el => processAttribute(el, 'src'));
 
-    // Process anchors? Maybe not, usually we want to stay in the app or open external.
-    // But if it links to another artifact html page, we might want to handle it?
-    // For now let's stick to resources.
+    // Process anchors
+    // For anchors, we want to intercept navigation to other artifacts
+    doc.querySelectorAll('a[href]').forEach(el => {
+        const href = el.getAttribute('href');
+        if (!href) return;
+
+        // Skip external, data, etc.
+        if (href.startsWith('http') || href.startsWith('//') || href.startsWith('data:') || href.startsWith('#')) {
+            // Let these behave normally (or maybe target=_blank if external?)
+            if (href.startsWith('http') || href.startsWith('//')) {
+                el.setAttribute('target', '_blank');
+            }
+            return;
+        }
+
+        const resolvedPath = resolvePath(href);
+        const artifact = sessionArtifacts.find(a => {
+            const aPath = a.path || '';
+            // Check exact match or unrooted match
+            return aPath === resolvedPath || aPath === '/' + resolvedPath || aPath.endsWith('/' + resolvedPath);
+        });
+
+        if (artifact) {
+            // Instead of blob url, we mark it for the injected script to handle
+            el.setAttribute('data-artifact-path', artifact.path || artifact.title || artifact.id);
+            el.setAttribute('href', 'javascript:void(0)'); // Prevent default nav
+        }
+    });
+
+    // Inject navigation script
+    const script = doc.createElement('script');
+    script.textContent = `
+        document.addEventListener('click', (e) => {
+            const link = e.target.closest('a[data-artifact-path]');
+            if (link) {
+                e.preventDefault();
+                const path = link.getAttribute('data-artifact-path');
+                window.parent.postMessage({ type: 'OPEN_ARTIFACT', path }, '*');
+            }
+        });
+    `;
+    doc.body.appendChild(script);
 
     return {
         html: doc.documentElement.outerHTML,

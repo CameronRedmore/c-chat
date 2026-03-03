@@ -22,6 +22,7 @@ const userInput = ref('');
 const isFlyoutOpen = ref(false);
 const isTreeViewOpen = ref(false);
 const isArtifactsOpen = ref(false);
+const isArtifactsFullScreen = ref(false);
 const messagesContainer = ref<HTMLElement | null>(null);
 const fileInput = ref<HTMLInputElement | null>(null);
 const selectedAttachments = ref<Attachment[]>([]);
@@ -361,8 +362,17 @@ watch(() => activeSession.value?.id, () => {
 
     <!-- Artifacts Panel (Desktop: Side, Mobile: Overlay) -->
     <div v-if="activeSession && isArtifactsOpen"
-      class="fixed inset-0 z-40 md:static md:z-0 md:w-1/2 lg:w-2/5 border-l border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 transition-all duration-300 ease-in-out shadow-xl md:shadow-none">
-      <ArtifactsPanel :session="activeSession" :is-open="isArtifactsOpen" @close="isArtifactsOpen = false" />
+      class="border-l border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 transition-all duration-300 ease-in-out shadow-xl md:shadow-none"
+      :class="isArtifactsFullScreen 
+        ? 'absolute inset-0 z-50' 
+        : 'absolute inset-0 z-40 md:static md:z-0'">
+      <ArtifactsPanel 
+        :session="activeSession" 
+        :is-open="isArtifactsOpen" 
+        :is-full-screen="isArtifactsFullScreen"
+        @toggle-fullscreen="isArtifactsFullScreen = !isArtifactsFullScreen"
+        @close="isArtifactsOpen = false" 
+      />
     </div>
 
     <!-- Flyout -->

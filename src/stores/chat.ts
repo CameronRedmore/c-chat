@@ -87,6 +87,7 @@ export interface ChatSession {
   modelId: string;
   systemPromptId?: string;
   temperature?: number;
+  topP?: number;
   messages: Message[];
   createdAt: number;
   updatedAt: number;
@@ -114,15 +115,6 @@ export const useChatStore = defineStore('chat', () => {
   const isGenerating = ref(false);
   let store: Store | null = null;
 
-  // Watch for activeSessionId changes to cleanup transient sessions
-  // We can't easily use watch here inside defineStore setup without importing it, 
-  // but we can handle it in the actions that change activeSessionId.
-  // Actually, we can use watch from 'vue'.
-  // But let's just handle it in the actions for explicit control.
-  // The main action that changes activeSessionId is createSession (handled above) 
-  // and direct assignment. 
-  // We should probably make an action `setActiveSession(id)` to handle this cleanup centrally.
-
   function setActiveSession(id: string | null) {
     if (activeSessionId.value === id) return;
 
@@ -131,7 +123,6 @@ export const useChatStore = defineStore('chat', () => {
       const prevSession = sessions.value.find(s => s.id === activeSessionId.value);
       if (prevSession && prevSession.isTransient) {
         sessions.value = sessions.value.filter(s => s.id !== prevSession.id);
-        // Do NOT save tombstone
       }
     }
 
@@ -139,8 +130,7 @@ export const useChatStore = defineStore('chat', () => {
     save();
   }
 
-  // We need to access settings store, but we should do it inside actions to avoid early access issues
-  // or use it lazily. Since this is a store definition, we can use it inside actions.
+
 
   async function getStore() {
     if (!store) {
@@ -159,8 +149,6 @@ export const useChatStore = defineStore('chat', () => {
     if (savedSessions) {
       // Migration: Ensure all messages have IDs and parts, and migrate to tree structure
       savedSessions.forEach(session => {
-        let previousMsgId: string | null = null;
-
         session.messages.forEach(msg => {
           if (!msg.id) msg.id = crypto.randomUUID();
 
@@ -209,15 +197,6 @@ export const useChatStore = defineStore('chat', () => {
             }
           }
 
-          // Migration to Tree:
-          // If parentId is undefined, assume linear history and link to previous message
-          if (msg.parentId === undefined) {
-            msg.parentId = previousMsgId;
-          }
-          if (!msg.childrenIds) {
-            msg.childrenIds = [];
-          }
-
           // Backfill childrenIds for the parent
           if (msg.parentId) {
             const parent = session.messages.find(m => m.id === msg.parentId);
@@ -229,7 +208,7 @@ export const useChatStore = defineStore('chat', () => {
             }
           }
 
-          previousMsgId = msg.id;
+
         });
 
         // Set currentLeafId if missing
@@ -322,9 +301,7 @@ export const useChatStore = defineStore('chat', () => {
       createdAt: Date.now(),
       updatedAt: Date.now()
     };
-    // Adjust orders of root items (projects and root sessions)
-    // This is a bit complex because they are in different arrays.
-    // For simplicity, let's just add it. The UI will handle reordering.
+    // Adjust orders of root items
     projects.value.unshift(newProject);
     save();
     return id;
@@ -448,28 +425,6 @@ export const useChatStore = defineStore('chat', () => {
     if (session) {
       const message = session.messages.find(m => m.id === messageId);
       if (message) {
-        // If we are editing the latest message in the current branch, we can just update it.
-        // But if we are editing a message that has children (or is not the leaf), we should probably branch?
-        // For now, let's stick to simple edit if it's a leaf, or maybe just update content.
-        // The user request implies "branching at a given message". 
-        // If the user edits a message, typically in ChatGPT/Claude, it creates a NEW branch (sibling) with the new content.
-
-        // Let's implement branching on edit.
-        // 1. Create new message with new content, same parent.
-        // 2. Switch to this new message.
-
-        // However, the existing editMessage was in-place.
-        // Let's change it to branch if it's not the last message? 
-        // Actually, even for the last message, if we want to keep history, we should branch.
-        // But "Edit" usually implies fixing a typo. "Regenerate" implies branching.
-        // Let's keep "Edit" as in-place for now unless we want to strictly follow the "branching" paradigm for everything.
-        // The prompt says "allow the user to branch a chat at a given message... separate branches should be easy to switch between".
-        // This usually implies the "Edit" button in UI creates a branch.
-
-        // Let's support both. But for now, to support the feature "branch at a given message", we'll add a `branchAt` action.
-        // And we can update `editMessage` to just update content for now, or we can make it branch.
-        // Let's make `editMessage` branch!
-
         const newMessage: Message = {
           ...message,
           id: crypto.randomUUID(),
@@ -533,17 +488,6 @@ export const useChatStore = defineStore('chat', () => {
       // If currentLeafId was deleted, reset it to parent of the deleted node (if available)
       if (session.currentLeafId && toDelete.has(session.currentLeafId)) {
         session.currentLeafId = message.parentId || null;
-        // If parent is null (root deleted), and there are other messages?
-        // If we deleted the root, we might have other roots?
-        // If we deleted the only path, currentLeafId becomes null.
-
-        // If we fell back to a node that has other children, should we select one of them as leaf?
-        // Ideally we want to select the "latest active" child of that parent.
-        // But we don't track "last active".
-        // So just selecting the parent is fine, the UI will render up to the parent.
-        // But wait, if we select the parent, and the parent has other children, the UI might want to show one of them?
-        // If we set currentLeafId to parent, the thread ends at parent.
-        // The UI will show "1 / N" for the next step if we implement it right.
       }
 
       session.updatedAt = Date.now();
@@ -561,32 +505,14 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   function deleteMessagesAfter(sessionId: string, messageId: string, inclusive: boolean = false) {
-    // This was for linear history. For tree, we probably just want to delete the subtree?
-    // Or maybe just "prune" this branch?
-    // Existing usage: handleRegenerate calls this to "rewind".
-    // With branching, we don't need to delete! We just branch!
-    // So we can deprecate this or change behavior.
-    // But if the user explicitly wants to delete, we use deleteMessage.
-
-    // For now, let's keep it but make it delete the subtree from that point in the CURRENT branch.
-    // But wait, if we regenerate, we DON'T want to delete anymore.
-    // So we should update the UI to NOT call this for regenerate.
-
-    // I will leave this function as is (linear deletion) but updated for tree cleanup if called?
-    // Actually, let's just implement subtree deletion.
-
     const session = sessions.value.find(s => s.id === sessionId);
     if (session) {
-      // Find the message
       const msg = session.messages.find(m => m.id === messageId);
       if (!msg) return;
 
       if (inclusive) {
         deleteMessage(sessionId, messageId);
       } else {
-        // Delete all children of this message that are on the current path?
-        // Or just all children?
-        // If we want to "clear forward history", we should delete all children.
         if (msg.childrenIds) {
           [...msg.childrenIds].forEach(childId => deleteMessage(sessionId, childId));
         }
@@ -614,18 +540,10 @@ export const useChatStore = defineStore('chat', () => {
 
     const siblingId = parent.childrenIds[newIndex];
 
-    // Now we need to switch the view to this sibling.
-    // But we need to find the "leaf" of this sibling to set currentLeafId.
-    // We should probably track the "last active leaf" for each node to restore state.
-    // For now, let's just walk down the "most recent" child or just the first child until we hit a leaf.
-    // Or simpler: just set currentLeafId to the siblingId? 
-    // If the sibling has children, we won't see them.
-    // We need to find the leaf.
+
 
     let curr = session.messages.find(m => m.id === siblingId);
     while (curr && curr.childrenIds && curr.childrenIds.length > 0) {
-      // Prefer the last added child? Or the most recently updated?
-      // Let's pick the last one in the array (most recently added).
       const nextId = curr.childrenIds[curr.childrenIds.length - 1];
       curr = session.messages.find(m => m.id === nextId);
     }
@@ -692,20 +610,14 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   async function generateTitle(sessionId: string, userContent: string, assistantContent: string) {
-    // We need to access settings store. 
-    // Note: Pinia allows using other stores inside actions.
-    const settingsStore = useSettingsStore(); // Need to import this or pass it? 
-    // We can import it at top level, but to avoid circular deps if any, internal usage is safe?
-    // Actually, we can just use `useSettingsStore()` here since `pinia` instance is active.
+    const settingsStore = useSettingsStore();
 
     const session = sessions.value.find(s => s.id === sessionId);
     if (!session) return;
 
     const { models, endpoints } = settingsStore;
 
-    // We need to resolve references since they are refs in the store?
-    // Actually settingsStore properties are state/getters, so unwrap if needed?
-    // `useSettingsStore` returns a reactive object. `models` is a state array.
+
 
     const model = models.find(m => m.id === session.modelId);
     if (!model) return;
@@ -723,9 +635,6 @@ Title:`;
     ];
 
     let title = '';
-
-    // Import sendMessage dynamically or at top? Top is better.
-    // Assuming we added import { sendMessage } from '../services/llm';
 
     try {
       await sendMessage(endpoint, model, messages, { temperature: 0.7 }, (payload) => {
@@ -799,18 +708,7 @@ Title:`;
     }
 
 
-    // sendMessage expects Message[] but handles 'system' role manually inside?
-    // Actually sendMessage implementation takes Message[] and constructs apiMessages.
-    // We should pass the thread.
 
-    if (systemPromptContent) {
-      // We can prepend system prompt, but sendMessage logic might want to handle it?
-      // Looking at original ChatView code:
-      // apiMessages.push({ role: 'system', ... });
-      // apiMessages.push(...activeThread.value.slice(0, -1));
-      // Wait, slice(0, -1) assumes the LAST message is the empty assistant message we just added?
-      // Yes, addMessage appends to messages. `thread` includes it.
-    }
 
     // Construct messages for API
     const messagesForApi: Message[] = [];
@@ -833,6 +731,7 @@ Title:`;
         messagesForApi,
         {
           temperature: session.temperature ?? model.temperature ?? 0.7,
+          topP: session.topP ?? model.topP,
         },
         (payload) => {
           if (!assistantMsg.parts) assistantMsg.parts = [];

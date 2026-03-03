@@ -50,7 +50,16 @@ const { activeSession } = storeToRefs(chatStore);
       </div>
 
       <div>
-        <label class="block text-sm font-medium mb-1">Temperature: {{ activeSession.temperature ?? 'Default' }}</label>
+        <div class="flex justify-between items-center mb-1">
+          <label class="block text-sm font-medium">Temperature: {{ activeSession.temperature ?? 'Default' }}</label>
+          <button 
+            v-if="activeSession.temperature !== undefined"
+            @click="activeSession!.temperature = undefined; chatStore.save()"
+            class="text-xs text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300"
+          >
+            Reset
+          </button>
+        </div>
         <input 
           type="range" 
           min="0" 
@@ -58,6 +67,28 @@ const { activeSession } = storeToRefs(chatStore);
           step="0.1" 
           :value="activeSession.temperature ?? 0.7"
           @input="e => { activeSession!.temperature = parseFloat((e.target as HTMLInputElement).value); chatStore.save(); }"
+          class="w-full"
+        />
+      </div>
+
+      <div>
+        <div class="flex justify-between items-center mb-1">
+          <label class="block text-sm font-medium">Top P: {{ activeSession.topP ?? 'Default' }}</label>
+          <button 
+            v-if="activeSession.topP !== undefined"
+            @click="activeSession!.topP = undefined; chatStore.save()"
+            class="text-xs text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300"
+          >
+            Reset
+          </button>
+        </div>
+        <input 
+          type="range" 
+          min="0" 
+          max="1" 
+          step="0.05" 
+          :value="activeSession.topP ?? 1"
+          @input="e => { activeSession!.topP = parseFloat((e.target as HTMLInputElement).value); chatStore.save(); }"
           class="w-full"
         />
       </div>

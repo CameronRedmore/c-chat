@@ -16,6 +16,7 @@ export interface UpdatePayload {
 
 export interface SamplerSettings {
   temperature?: number;
+  topP?: number;
 }
 
 export async function sendMessage(
@@ -59,11 +60,13 @@ export async function sendMessage(
           });
         } else if (part.type === 'tool-result' && part.toolResult) {
           // Flush pending assistant message
-          apiMessages.push({
-            role: 'assistant',
-            content: pendingContent || null,
-            tool_calls: pendingToolCalls.length > 0 ? pendingToolCalls : undefined
-          });
+          if (pendingContent || pendingToolCalls.length > 0) {
+            apiMessages.push({
+              role: 'assistant',
+              content: pendingContent || null,
+              tool_calls: pendingToolCalls.length > 0 ? pendingToolCalls : undefined
+            });
+          }
 
           pendingContent = '';
           pendingToolCalls = [];
@@ -241,7 +244,7 @@ export async function sendMessage(
   let currentMessages = [...apiMessages];
   let keepGoing = true;
   let loopCount = 0;
-  const MAX_LOOPS = 5;
+  const MAX_LOOPS = 50;
 
   while (keepGoing && loopCount < MAX_LOOPS) {
     loopCount++;
@@ -253,6 +256,10 @@ export async function sendMessage(
       temperature: settings.temperature,
       stream: true,
     };
+
+    if (settings.topP !== undefined) {
+      body.top_p = settings.topP;
+    }
 
     if (tools.length > 0) {
       body.tools = tools;
@@ -359,34 +366,28 @@ export async function sendMessage(
                   if (tc.function?.arguments) current.function.arguments += tc.function.arguments;
 
                   // Streaming Artifact Update
-                  if (current.function.name === 'create_artifact' || current.function.name === 'update_artifact') {
+                  if (current.function.name === 'create_file' || current.function.name === 'update_file') {
                     try {
                       const partialArgs = parsePartialJson(current.function.arguments);
-                      if (partialArgs && (partialArgs.content || partialArgs.title)) {
+                      // We wait for content to be present to ensure path is likely fully streamed/parsed
+                      // This avoids creating artifacts with partial paths like "s", "sr", "src"
+                      if (partialArgs && partialArgs.path && partialArgs.content !== undefined) {
                         const chatStore = useChatStore();
-                        if (partialArgs.id) {
-                          // We need to construct a partial artifact
-                          // But createArtifact expects a full Artifact object or we need a new method.
-                          // However, we modified createArtifact to handle upserts.
-                          // So we can pass what we have.
-                          // We need to ensure we don't overwrite with undefined.
-                          // The upsert logic in chat.ts checks for fields presence.
 
-                          // Construct a partial object that satisfies the type but has undefineds
-                          // We can cast it.
-                          const artifactUpdate: any = {
-                            id: partialArgs.id,
-                            title: partialArgs.title,
-                            type: partialArgs.type,
-                            content: partialArgs.content,
-                            // We don't have createdAt/updatedAt here, store handles updatedAt
-                          };
+                        // Construct artifact update
+                        // We use path as ID to match clientTools behavior
+                        const artifactUpdate: any = {
+                          id: partialArgs.path,
+                          path: partialArgs.path,
+                          title: partialArgs.path.split('/').pop() || partialArgs.path,
+                          content: partialArgs.content,
+                        };
 
-                          // Only call if we have an ID
-                          if (artifactUpdate.id) {
-                            chatStore.createArtifact(sessionId, artifactUpdate, true);
-                          }
+                        if (partialArgs.type) {
+                          artifactUpdate.type = partialArgs.type;
                         }
+
+                        chatStore.createArtifact(sessionId, artifactUpdate, true);
                       }
                     } catch (e) {
                       // Ignore parse errors during streaming

@@ -15,6 +15,7 @@ export interface Model {
   endpointId: string;
   contextSize?: number;
   temperature?: number;
+  topP?: number;
   supportsVision?: boolean;
   supportsFunctionCalling?: boolean;
 }

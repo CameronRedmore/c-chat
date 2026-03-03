@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
+import { computed, ref, watch, onUnmounted, onMounted } from 'vue';
 import { useChatStore, type ChatSession, type Artifact } from '../stores/chat';
 import { Icon } from '@iconify/vue';
 import { renderMarkdown } from '../utils/markdown';
@@ -13,10 +13,12 @@ import { saveAs } from 'file-saver';
 const props = defineProps<{
   session: ChatSession;
   isOpen: boolean;
+  isFullScreen: boolean;
 }>();
 
-defineEmits<{
+const emit = defineEmits<{
   (e: 'close'): void;
+  (e: 'toggle-fullscreen'): void;
 }>();
 
 const store = useChatStore();
@@ -24,7 +26,45 @@ const sessionArtifacts = computed(() => store.getArtifactsForSession(props.sessi
 
 const activeArtifactId = ref<string | null>(null);
 const showRaw = ref(false);
-const isSidebarOpen = ref(true); // Toggle for file tree
+const isSidebarOpen = ref(true);
+
+const panelWidth = ref(450);
+const isResizing = ref(false);
+
+function toggleFullScreen() {
+  emit('toggle-fullscreen');
+}
+
+function startResize() {
+  isResizing.value = true;
+  document.addEventListener('mousemove', handleResize);
+  document.addEventListener('mouseup', stopResize);
+  // Prevent text selection while resizing
+  document.body.style.userSelect = 'none';
+}
+
+function handleResize(e: MouseEvent) {
+  if (!isResizing.value) return;
+  // Calculate new width: Total Window Width - Mouse X Position
+  const newWidth = window.innerWidth - e.clientX;
+  
+  // Constraints
+  if (newWidth < 300) {
+    panelWidth.value = 300;
+  } else if (newWidth > window.innerWidth - 100) {
+    panelWidth.value = window.innerWidth - 100;
+  } else {
+    panelWidth.value = newWidth;
+  }
+}
+
+function stopResize() {
+  isResizing.value = false;
+  document.removeEventListener('mousemove', handleResize);
+  document.removeEventListener('mouseup', stopResize);
+  document.body.style.userSelect = '';
+}
+
 
 // Watch for new artifacts to auto-select the latest one
 watch(() => sessionArtifacts.value.length, (newLen, oldLen) => {
@@ -49,6 +89,7 @@ const activeArtifact = computed(() => {
 const displayContent = ref('');
 const lastSeenId = ref<string | null>(null);
 
+const cleanupFn = ref<(() => void) | null>(null);
 
 watch(() => activeArtifact.value, (newArt) => {
   if (!newArt) {
@@ -70,9 +111,6 @@ watch(() => activeArtifact.value, (newArt) => {
     lastSeenId.value = newArt.id;
   } else {
     // Throttled update
-    // Note: Re-resolving links on every keystroke might be expensive + flicker?
-    // But if they edit the HTML to add a link, we need to resolve it.
-    // For now, let's just resolve it.
     if (newArt.type === 'text/html' || newArt.path?.endsWith('.html')) {
       updateContentThrottled(newArt.content, true);
     } else {
@@ -81,7 +119,7 @@ watch(() => activeArtifact.value, (newArt) => {
   }
 }, { immediate: true, deep: true });
 
-const cleanupFn = ref<(() => void) | null>(null);
+
 
 // Override the throttled function to handle HTML resolution
 const updateContentThrottled = throttle((content: string, isHtml: boolean) => {
@@ -177,13 +215,108 @@ async function downloadZip() {
     console.error('Failed to generate zip:', e);
   }
 }
+
+function handleMarkdownClick(event: MouseEvent) {
+  const target = event.target as HTMLElement;
+  // Find closest anchor tag
+  const anchor = target.closest('a');
+  
+  if (!anchor) return;
+  
+  const href = anchor.getAttribute('href');
+  if (!href) return;
+
+  // Prevent default navigation
+  event.preventDefault();
+
+  // Check if external link
+  if (href.startsWith('http') || href.startsWith('//') || href.startsWith('mailto:')) {
+    window.open(href, '_blank');
+    return;
+  }
+
+  // Handle internal relative link
+  const currentPath = activeArtifact.value?.path;
+  if (!currentPath) return;
+  
+  const basePath = currentPath.split('/').slice(0, -1).join('/');
+  let resolvedPath = '';
+
+  if (href.startsWith('/')) {
+    resolvedPath = href.slice(1);
+  } else { 
+    // basic relative resolution
+    const parts = basePath ? basePath.split('/') : [];
+    const relParts = href.split('/');
+    
+    for (const part of relParts) {
+      if (part === '.') continue;
+      if (part === '..') {
+        if (parts.length > 0) parts.pop();
+      } else {
+        parts.push(part);
+      }
+    }
+    resolvedPath = parts.join('/');
+  }
+
+  // Find artifact with this path
+  const targetArtifact = sessionArtifacts.value.find(a => {
+    const aPath = a.path || '';
+    // Check exact match or unrooted match
+    return aPath === resolvedPath || aPath === '/' + resolvedPath || aPath.endsWith('/' + resolvedPath);
+  });
+
+  if (targetArtifact) {
+    activeArtifactId.value = targetArtifact.id;
+  } else {
+    console.warn('Could not find linked artifact:', resolvedPath);
+  }
+}
+
+onMounted(() => {
+  window.addEventListener('message', handleMessage);
+});
+
+onUnmounted(() => {
+  window.removeEventListener('message', handleMessage);
+  // Existing cleanup
+  document.removeEventListener('mousemove', handleResize);
+  document.removeEventListener('mouseup', stopResize);
+});
+
+function handleMessage(event: MessageEvent) {
+  if (event.data?.type === 'OPEN_ARTIFACT' && event.data?.path) {
+    const targetPath = event.data.path;
+    const targetArtifact = sessionArtifacts.value.find(a => 
+      a.path === targetPath || a.path === '/' + targetPath || (a.path && a.path.endsWith('/' + targetPath)) || a.title === targetPath || a.id === targetPath
+    );
+    
+    if (targetArtifact) {
+      activeArtifactId.value = targetArtifact.id;
+    }
+  }
+}
 </script>
 
 <template>
-  <div class="h-full flex flex-col bg-white dark:bg-gray-900 border-l border-gray-200 dark:border-gray-700">
+  <div 
+    class="flex flex-col bg-white dark:bg-gray-900 border-l border-gray-200 dark:border-gray-700 transition-[width] duration-0 ease-linear shadow-xl h-full"
+    :class="{ 
+      'relative': !isFullScreen 
+    }"
+    :style="!isFullScreen ? { width: `${panelWidth}px` } : { width: '100%' }"
+  >
+    <!-- Resize Handle -->
+    <div 
+      v-if="!isFullScreen"
+      class="absolute left-0 top-0 bottom-0 w-1 cursor-ew-resize hover:bg-blue-500/50 z-50 transition-colors"
+      @mousedown.prevent="startResize"
+    ></div>
+
     <!-- Header -->
     <div
-      class="h-14 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between px-4 bg-gray-50 dark:bg-gray-800/50">
+      class="h-14 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between px-4 bg-gray-50 dark:bg-gray-800/50 flex-shrink-0">
       <div class="flex items-center gap-2 overflow-hidden">
         <button @click="isSidebarOpen = !isSidebarOpen" class="hover:bg-gray-200 dark:hover:bg-gray-700 p-1 rounded"
           title="Toggle File Tree">
@@ -199,12 +332,21 @@ async function downloadZip() {
           class="p-2 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-lg" title="Download Artifacts as Zip">
           <Icon icon="lucide:download" class="w-5 h-5" />
         </button>
+        
+        <button @click="toggleFullScreen" class="p-2 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-lg"
+          :title="isFullScreen ? 'Exit Full Screen' : 'Full Screen'">
+            <Icon :icon="isFullScreen ? 'lucide:minimize-2' : 'lucide:maximize-2'" class="w-5 h-5" />
+        </button>
+
         <button @click="showRaw = !showRaw" class="p-2 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-lg"
           :class="{ 'bg-gray-200 dark:bg-gray-700': showRaw }" title="Toggle raw source">
           <Icon icon="lucide:code" class="w-5 h-5" />
         </button>
-        <button @click="$emit('close')" class="p-2 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-lg">
+        <button v-if="!isFullScreen" @click="$emit('close')" class="p-2 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-lg">
           <Icon icon="lucide:x" class="w-5 h-5" />
+        </button>
+        <button v-else @click="toggleFullScreen" class="p-2 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-lg" title="Exit Full Screen">
+           <Icon icon="lucide:x" class="w-5 h-5" />
         </button>
       </div>
     </div>
@@ -236,7 +378,7 @@ async function downloadZip() {
           <!-- Code/Text View -->
           <div v-else class="h-full flex flex-col">
             <div
-              class="flex justify-between items-center px-4 py-2 bg-gray-100 dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 text-xs">
+              class="flex justify-between items-center px-4 py-2 bg-gray-100 dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 text-xs flex-shrink-0">
               <span class="font-mono opacity-70 truncate max-w-[300px]">{{ activeArtifact.path || activeArtifact.title
                 }}</span>
               <button @click="copyContent" class="flex items-center gap-1 hover:text-blue-500">
@@ -245,7 +387,7 @@ async function downloadZip() {
             </div>
             <div class="flex-1 overflow-auto p-4 bg-gray-50 dark:bg-gray-900">
               <div v-if="!showRaw && activeArtifact.type === 'text/markdown'" class="prose dark:prose-invert max-w-none"
-                v-html="renderedContent"></div>
+                v-html="renderedContent" @click="handleMarkdownClick"></div>
               <pre v-else
                 class="font-mono text-sm whitespace-pre-wrap text-gray-800 dark:text-gray-200"><code class="hljs bg-transparent !p-0 !border-0" v-html="rawHighlightedContent"></code></pre>
             </div>
